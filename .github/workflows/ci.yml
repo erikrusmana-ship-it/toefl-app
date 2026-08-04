@@ -24,6 +24,9 @@ jobs:
       - name: Install dependencies (including dev)
         run: npm ci --include=dev
 
+      - name: Ensure Playwright package present
+        run: npm install --no-save playwright@^1.39.0
+
       - name: Run ESLint
         run: npm run lint > lint.txt 2>&1 || true
 

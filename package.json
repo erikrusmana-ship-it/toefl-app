@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:e2e": "npx playwright test tests/e2e.spec.js --workers=1 --reporter=list"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.0",
@@ -21,6 +22,9 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
+    "playwright": "^1.39.0",
+    "@playwright/test": "^1.39.0",
+    "wait-on": "^9.1.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

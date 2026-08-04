@@ -24,9 +24,6 @@ jobs:
       - name: Install dependencies (including dev)
         run: npm ci --include=dev
 
-      - name: Ensure Playwright package present
-        run: npm install --no-save playwright@^1.39.0
-
       - name: Run ESLint
         run: npm run lint > lint.txt 2>&1 || true
 
@@ -53,7 +50,7 @@ jobs:
         run: npx playwright install --with-deps chromium > playwright_install.txt 2>&1 || true
 
       - name: Run E2E tests (Playwright)
-        run: node tests/e2e.spec.js > e2e.txt 2>&1 || true
+        run: npm run test:e2e > e2e.txt 2>&1 || true
 
       - name: Upload test logs
         uses: actions/upload-artifact@v4

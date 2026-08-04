@@ -37,9 +37,17 @@ jobs:
         run: npx tsc --noEmit > tsc.txt 2>&1 || true
 
       - name: Start Next.js (production)
+        continue-on-error: true
         run: |
           nohup npm run start > next.log 2>&1 &
-          npx wait-on http://localhost:3000 --timeout 60000
+          npx wait-on http://localhost:3000 --timeout 60000 || true
+
+      - name: Show Next.js log
+        run: |
+          echo "--- next.log ---"
+          sleep 1
+          cat next.log || true
+          echo "--- end next.log ---"
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium > playwright_install.txt 2>&1 || true

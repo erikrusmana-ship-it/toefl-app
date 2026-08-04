@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { FormEvent, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
@@ -18,7 +18,7 @@ export default function AdminPage() {
   const [loading, setLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<{ text: string; isError: boolean } | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoading(true);
     setMessage(null);
@@ -77,8 +77,8 @@ export default function AdminPage() {
       setCorrectAnswer("A");
       setAudioFile(null);
       setAudioUrlInput("");
-    } catch (err: any) {
-      setMessage({ text: `❌ ${err.message}`, isError: true });
+    } catch (err: unknown) {
+      setMessage({ text: `❌ ${err instanceof Error ? err.message : String(err)}`, isError: true });
     } finally {
       setLoading(false);
     }

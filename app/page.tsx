@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 interface Question {
@@ -40,8 +40,8 @@ export default function Home() {
 
         if (error) throw error;
         setQuestions(data || []);
-      } catch (err: any) {
-        console.error("Gagal mengambil soal:", err.message);
+      } catch (err: unknown) {
+        console.error("Gagal mengambil soal:", err instanceof Error ? err.message : String(err));
       } finally {
         setLoading(false);
       }
@@ -50,12 +50,47 @@ export default function Home() {
     fetchQuestions();
   }, []);
 
+  const processSubmit = useCallback(async () => {
+    if (isSubmitted) return;
+
+    let correct = 0;
+    questions.forEach((q) => {
+      if (selectedAnswers[q.id] === q.correct_answer) {
+        correct += 1;
+      }
+    });
+
+    const calculatedScore = Math.round(310 + (correct / (questions.length || 1)) * 367);
+
+    setCorrectCount(correct);
+    setFinalScore(calculatedScore);
+    setIsSubmitted(true);
+    setIsSaving(true);
+
+    try {
+      const { error } = await supabase.from("test_scores").insert([
+        {
+          user_name: userName.trim() || "Peserta Anonim",
+          total_questions: questions.length,
+          correct_answers: correct,
+          score: calculatedScore,
+        },
+      ]);
+
+      if (error) throw error;
+    } catch (err: unknown) {
+      alert(`Gagal menyimpan skor ke database: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [isSubmitted, questions, selectedAnswers, userName]);
+
   useEffect(() => {
     if (loading || isSubmitted || questions.length === 0) return;
 
     if (timeLeft <= 0) {
       alert("⏰ Waktu habis! Jawaban Anda otomatis dikumpulkan.");
-      processSubmit();
+      setTimeout(() => processSubmit(), 0);
       return;
     }
 
@@ -64,7 +99,7 @@ export default function Home() {
     }, 1000);
 
     return () => clearInterval(timerInterval);
-  }, [timeLeft, loading, isSubmitted, questions.length]);
+  }, [timeLeft, loading, isSubmitted, questions.length, processSubmit]);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -87,41 +122,6 @@ export default function Home() {
       }
     }
     processSubmit();
-  };
-
-  const processSubmit = async () => {
-    if (isSubmitted) return;
-
-    let correct = 0;
-    questions.forEach((q) => {
-      if (selectedAnswers[q.id] === q.correct_answer) {
-        correct += 1;
-      }
-    });
-
-    const calculatedScore = Math.round(310 + (correct / (questions.length || 1)) * 367);
-    
-    setCorrectCount(correct);
-    setFinalScore(calculatedScore);
-    setIsSubmitted(true);
-    setIsSaving(true);
-
-    try {
-      const { error } = await supabase.from("test_scores").insert([
-        {
-          user_name: userName.trim() || "Peserta Anonim",
-          total_questions: questions.length,
-          correct_answers: correct,
-          score: calculatedScore,
-        },
-      ]);
-
-      if (error) throw error;
-    } catch (err: any) {
-      alert(`Gagal menyimpan skor ke database: ${err.message}`);
-    } finally {
-      setIsSaving(false);
-    }
   };
 
   return (

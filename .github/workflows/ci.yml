@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    name: Lint, Build and Typecheck
+    name: Lint, Build and Test
     runs-on: ubuntu-latest
 
     steps:
@@ -25,34 +25,51 @@ jobs:
         run: npm ci --include=dev
 
       - name: Run ESLint
-        run: npm run lint > lint.txt 2>&1 || true
+        run: npm run lint > lint.txt 2>&1
 
       - name: Build Next.js
-        run: npm run build > build.txt 2>&1 || true
+        run: npm run build > build.txt 2>&1
 
       - name: TypeScript type check
-        run: npx tsc --noEmit > tsc.txt 2>&1 || true
-
-      - name: Start Next.js (production)
-        continue-on-error: true
-        run: |
-          nohup npm run start > next.log 2>&1 &
-          npx wait-on http://localhost:3000 --timeout 60000 || true
-
-      - name: Show Next.js log
-        run: |
-          echo "--- next.log ---"
-          sleep 1
-          cat next.log || true
-          echo "--- end next.log ---"
+        run: npx tsc --noEmit > tsc.txt 2>&1
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium > playwright_install.txt 2>&1 || true
+        run: npx playwright install --with-deps chromium > playwright_install.txt 2>&1
+
+      - name: Start Next.js production server
+        run: |
+          nohup npm run start -- --hostname 127.0.0.1 --port 3000 > next.log 2>&1 &
+          echo $! > next.pid
+          npx wait-on http://127.0.0.1:3000 --timeout 60000
 
       - name: Run E2E tests (Playwright)
-        run: npm run test:e2e > e2e.txt 2>&1 || true
+        run: npm run test:e2e > e2e.txt 2>&1
 
-      - name: Upload test logs
+      - name: Stop Next.js production server
+        if: always()
+        run: |
+          if [ -f next.pid ]; then
+            kill "$(cat next.pid)" || true
+          fi
+
+      - name: Show collected logs
+        if: always()
+        run: |
+          echo "--- next.log ---"
+          cat next.log || true
+          echo "--- e2e.txt ---"
+          cat e2e.txt || true
+          echo "--- playwright_install.txt ---"
+          cat playwright_install.txt || true
+          echo "--- lint.txt ---"
+          cat lint.txt || true
+          echo "--- build.txt ---"
+          cat build.txt || true
+          echo "--- tsc.txt ---"
+          cat tsc.txt || true
+
+      - name: Upload test artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-logs
@@ -62,3 +79,5 @@ jobs:
             tsc.txt
             playwright_install.txt
             e2e.txt
+            next.log
+            next.pid

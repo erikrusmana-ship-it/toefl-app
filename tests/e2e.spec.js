@@ -2,10 +2,10 @@ const { test, expect } = require('@playwright/test');
 
 test('Home and Admin pages render', async ({ page }) => {
   await page.goto('http://localhost:3000', { waitUntil: 'domcontentloaded' });
-  const header = await page.locator('h1').textContent();
-  expect(header).toContain('Simulasi Tes TOEFL');
+  await expect(page.getByRole('heading', { name: /Isi Biodata Peserta/i })).toBeVisible();
+  await expect(page.getByLabel('Nama Lengkap')).toBeVisible();
+  await expect(page.getByLabel(/Email atau NIM|Email \/ NIM/i)).toBeVisible();
 
   await page.goto('http://localhost:3000/admin', { waitUntil: 'domcontentloaded' });
-  const adminHeading = await page.locator('h1').textContent();
-  expect(adminHeading).toContain('Form Input Soal TOEFL');
+  await expect(page.getByRole('heading', { name: /Form Input Soal TOEFL/i })).toBeVisible();
 });

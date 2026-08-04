@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:e2e": "npx playwright test tests/e2e.spec.js --workers=1 --reporter=list"
+    "test:e2e": "npx playwright test tests/e2e.spec.js --workers=1 --reporter=list",
+    "test:ci": "./scripts/test-ci.sh"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.0",

@@ -1,289 +1,207 @@
-"use client";
+'use client'
+import { useState } from 'react'
+import { createClient } from '@supabase/supabase-js'
 
-import { useCallback, useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
-interface Question {
-  id: number;
-  section: string;
-  question_text: string;
-  option_a: string;
-  option_b: string;
-  option_c: string;
-  option_d: string;
-  correct_answer: string;
-  audio_url?: string | null;
-}
+// Contoh data struktur 50 soal Listening
+const SOAL_LISTENING = Array.from({ length: 50 }, (_, i) => {
+  const nomor = i + 1
+  let part = 'Part A: Short Conversation'
+  if (nomor >= 31 && nomor <= 37) part = 'Part B: Longer Conversation'
+  if (nomor >= 38) part = 'Part C: Monologue'
 
-export default function Home() {
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [selectedAnswers, setSelectedAnswers] = useState<{ [key: number]: string }>({});
-  
-  const DURATION_IN_SECONDS = 120;
-  const [timeLeft, setTimeLeft] = useState<number>(DURATION_IN_SECONDS);
+  return {
+    id: nomor,
+    part: part,
+    audioUrl: `/audio/listening/no-${nomor}.mp3`, // Lokasi file audio
+    pilihan: ['(A) Option A text', '(B) Option B text', '(C) Option C text', '(D) Option D text'],
+  }
+})
 
-  const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
-  const [isSaving, setIsSaving] = useState<boolean>(false);
-  const [finalScore, setFinalScore] = useState<number | null>(null);
-  const [correctCount, setCorrectCount] = useState<number>(0);
-  const [userName, setUserName] = useState<string>("");
+export default function HomePage() {
+  // State Biodata
+  const [nama, setNama] = useState('')
+  const [email, setEmail] = useState('')
+  const [pesertaId, setPesertaId] = useState<number | null>(null)
 
-  useEffect(() => {
-    async function fetchQuestions() {
-      try {
-        setLoading(true);
-        const { data, error } = await supabase
-          .from("questions")
-          .select("*")
-          .order("id", { ascending: true });
+  // State Navigasi
+  const [step, setStep] = useState<'biodata' | 'listening' | 'selesai'>('biodata')
+  const [currentIndex, setCurrentIndex] = useState(0)
+  const [jawaban, setJawaban] = useState<{ [key: number]: string }>({})
+  const [loading, setLoading] = useState(false)
 
-        if (error) throw error;
-        setQuestions(data || []);
-      } catch (err: unknown) {
-        console.error("Gagal mengambil soal:", err instanceof Error ? err.message : String(err));
-      } finally {
-        setLoading(false);
-      }
+  // 1. Simpan Biodata dan Lanjut ke Listening
+  const handleStartTest = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoading(true)
+
+    const { data, error } = await supabase
+      .from('peserta')
+      .insert([{ nama, email }])
+      .select()
+      .single()
+
+    setLoading(false)
+
+    if (error) {
+      alert('Gagal menyimpan biodata: ' + error.message)
+    } else {
+      setPesertaId(data.id)
+      setStep('listening') // Pindah langsung ke Listening Comprehension
     }
+  }
 
-    fetchQuestions();
-  }, []);
+  // 2. Simpan Pilihan Jawaban
+  const handleSelectOption = (nomorSoal: number, opsi: string) => {
+    setJawaban((prev) => ({ ...prev, [nomorSoal]: opsi }))
+  }
 
-  const processSubmit = useCallback(async () => {
-    if (isSubmitted) return;
+  // 3. Kirim Semua Jawaban ke Supabase
+  const handleSubmitAllAnswers = async () => {
+    setLoading(true)
+    const { error } = await supabase.from('jawaban_peserta').insert(
+      Object.keys(jawaban).map((no) => ({
+        peserta_id: pesertaId,
+        nomor_soal: Number(no),
+        jawaban: jawaban[Number(no)],
+      }))
+    )
+    setLoading(false)
 
-    let correct = 0;
-    questions.forEach((q) => {
-      if (selectedAnswers[q.id] === q.correct_answer) {
-        correct += 1;
-      }
-    });
-
-    const calculatedScore = Math.round(310 + (correct / (questions.length || 1)) * 367);
-
-    setCorrectCount(correct);
-    setFinalScore(calculatedScore);
-    setIsSubmitted(true);
-    setIsSaving(true);
-
-    try {
-      const { error } = await supabase.from("test_scores").insert([
-        {
-          user_name: userName.trim() || "Peserta Anonim",
-          total_questions: questions.length,
-          correct_answers: correct,
-          score: calculatedScore,
-        },
-      ]);
-
-      if (error) throw error;
-    } catch (err: unknown) {
-      alert(`Gagal menyimpan skor ke database: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setIsSaving(false);
+    if (error) {
+      alert('Gagal mengirim jawaban: ' + error.message)
+    } else {
+      setStep('selesai')
     }
-  }, [isSubmitted, questions, selectedAnswers, userName]);
+  }
 
-  useEffect(() => {
-    if (loading || isSubmitted || questions.length === 0) return;
+  const currentSoal = SOAL_LISTENING[currentIndex]
 
-    if (timeLeft <= 0) {
-      alert("⏰ Waktu habis! Jawaban Anda otomatis dikumpulkan.");
-      setTimeout(() => processSubmit(), 0);
-      return;
-    }
-
-    const timerInterval = setInterval(() => {
-      setTimeLeft((prev) => prev - 1);
-    }, 1000);
-
-    return () => clearInterval(timerInterval);
-  }, [timeLeft, loading, isSubmitted, questions.length, processSubmit]);
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-  };
-
-  const handleSelectAnswer = (questionId: number, answer: string) => {
-    if (isSubmitted) return;
-    setSelectedAnswers((prev) => ({
-      ...prev,
-      [questionId]: answer,
-    }));
-  };
-
-  const handleManualSubmit = () => {
-    if (Object.keys(selectedAnswers).length < questions.length) {
-      if (!confirm("Masih ada soal yang belum dijawab. Yakin ingin mengumpulkan?")) {
-        return;
-      }
-    }
-    processSubmit();
-  };
-
-  return (
-    <main className="min-h-screen bg-gray-50 py-10 px-4 font-sans">
-      <div className="max-w-2xl mx-auto space-y-6">
-        
-        {/* Header & Sticky Timer */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 sticky top-4 z-10">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-            <div>
-              <h1 className="text-xl font-bold text-gray-800">Simulasi Tes TOEFL</h1>
-              <p className="text-xs text-gray-500">Pilih jawaban dan pantau sisa waktu Anda.</p>
-            </div>
-
-            {!loading && !isSubmitted && (
-              <div
-                className={`px-4 py-2 rounded-xl border text-center font-mono font-bold transition-all ${
-                  timeLeft <= 30
-                    ? "bg-red-50 border-red-300 text-red-600 animate-pulse"
-                    : "bg-blue-50 border-blue-200 text-blue-700"
-                }`}
-              >
-                <p className="text-[10px] uppercase tracking-wider font-sans text-gray-500">Sisa Waktu</p>
-                <p className="text-xl">{formatTime(timeLeft)}</p>
-              </div>
-            )}
+  // ================= TAMPILAN 1: BIODATA =================
+  if (step === 'biodata') {
+    return (
+      <main style={{ padding: '40px 20px', maxWidth: '450px', margin: '0 auto', fontFamily: 'sans-serif' }}>
+        <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>Biodata Peserta TOEFL</h2>
+        <form onSubmit={handleStartTest} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+          <div>
+            <label style={{ fontWeight: 'bold' }}>Nama Lengkap:</label>
+            <input
+              type="text"
+              required
+              value={nama}
+              onChange={(e) => setNama(e.target.value)}
+              style={{ width: '100%', padding: '10px', marginTop: '5px', borderRadius: '6px', border: '1px solid #ccc' }}
+            />
           </div>
-          
-          {!isSubmitted && (
-            <div className="mt-4 pt-3 border-t">
-              <label className="block text-xs font-semibold text-gray-600 mb-1">
-                Nama Peserta:
-              </label>
-              <input
-                type="text"
-                placeholder="Masukkan nama Anda..."
-                value={userName}
-                onChange={(e) => setUserName(e.target.value)}
-                className="w-full p-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-          )}
+          <div>
+            <label style={{ fontWeight: 'bold' }}>Email / NIM:</label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              style={{ width: '100%', padding: '10px', marginTop: '5px', borderRadius: '6px', border: '1px solid #ccc' }}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={loading}
+            style={{ padding: '12px', backgroundColor: '#0070f3', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}
+          >
+            {loading ? 'Menyimpan...' : 'Mulai Section 1: Listening'}
+          </button>
+        </form>
+      </main>
+    )
+  }
+
+  // ================= TAMPILAN 2: LISTENING COMPREHENSION =================
+  if (step === 'listening') {
+    return (
+      <main style={{ padding: '20px', maxWidth: '700px', margin: '0 auto', fontFamily: 'sans-serif' }}>
+        {/* Header Section */}
+        <div style={{ borderBottom: '2px solid #eee', paddingBottom: '15px', marginBottom: '20px' }}>
+          <h2 style={{ margin: 0 }}>Section 1: Listening Comprehension</h2>
+          <p style={{ color: '#0070f3', fontWeight: 'bold', margin: '5px 0 0 0' }}>{currentSoal.part}</p>
         </div>
 
-        {/* Loading Indicator */}
-        {loading && (
-          <div className="bg-white p-6 rounded-xl text-center text-blue-600 font-medium border shadow-sm">
-            ⏳ Memuat soal tes...
-          </div>
-        )}
+        {/* Audio Player */}
+        <div style={{ backgroundColor: '#f7f9fa', padding: '15px', borderRadius: '8px', marginBottom: '20px' }}>
+          <p style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#555' }}>Dengarkan audio berikut:</p>
+          <audio key={currentSoal.id} controls style={{ width: '100%' }}>
+            <source src={currentSoal.audioUrl} type="audio/mpeg" />
+            Browser Anda tidak mendukung pemutar audio.
+          </audio>
+        </div>
 
-        {/* Hasil Skor */}
-        {isSubmitted && (
-          <div className="bg-blue-600 text-white p-6 rounded-xl shadow-md space-y-2">
-            <h2 className="text-lg font-bold">🎉 Tes Selesai!</h2>
-            <p className="text-sm">
-              Peserta: <strong>{userName || "Peserta Anonim"}</strong>
-            </p>
-            <div className="flex gap-4 pt-2">
-              <div className="bg-white/10 px-4 py-2 rounded-lg">
-                <p className="text-xs text-blue-100">Jawaban Benar</p>
-                <p className="text-xl font-extrabold">{correctCount} / {questions.length}</p>
-              </div>
-              <div className="bg-white/10 px-4 py-2 rounded-lg">
-                <p className="text-xs text-blue-100">Perkiraan Skor TOEFL</p>
-                <p className="text-xl font-extrabold">{finalScore}</p>
-              </div>
-            </div>
-            {isSaving ? (
-              <p className="text-xs text-blue-200 pt-2 animate-pulse">💾 Menyimpan skor ke cloud Supabase...</p>
-            ) : (
-              <p className="text-xs text-green-200 pt-2">✓ Skor berhasil tersimpan ke database!</p>
-            )}
-          </div>
-        )}
-
-        {/* Daftar Soal */}
-        {!loading && questions.map((q, index) => (
-          <div key={q.id} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 space-y-4">
-            <div className="flex justify-between items-center">
-              <span className="text-xs font-semibold bg-blue-100 text-blue-800 px-2.5 py-1 rounded-full">
-                Soal #{index + 1} ({q.section})
-              </span>
-              {isSubmitted && (
-                <span className={`text-xs font-bold px-2 py-1 rounded ${
-                  selectedAnswers[q.id] === q.correct_answer 
-                    ? "bg-green-100 text-green-800" 
-                    : "bg-red-100 text-red-800"
-                }`}>
-                  {selectedAnswers[q.id] === q.correct_answer ? "Benar" : "Salah"}
-                </span>
-              )}
-            </div>
-
-            <p className="text-base font-semibold text-gray-800">{q.question_text}</p>
-
-            {/* Pemutar Audio */}
-            {q.audio_url && (
-              <div className="my-3 p-3 bg-blue-50 rounded-lg border border-blue-100 space-y-1">
-                <p className="text-xs font-semibold text-blue-800">🎧 Dengarkan Audio Berikut:</p>
-                <audio 
-                  controls 
-                  src={q.audio_url} 
-                  className="w-full h-10 rounded" 
-                  controlsList="nodownload"
+        {/* Soal & Pilihan Jawaban */}
+        <div style={{ marginBottom: '30px' }}>
+          <h3 style={{ marginBottom: '15px' }}>Soal No. {currentSoal.id} dari 50</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {currentSoal.pilihan.map((opsi, index) => {
+              const char = String.fromCharCode(65 + index) // A, B, C, D
+              const isSelected = jawaban[currentSoal.id] === char
+              return (
+                <button
+                  key={index}
+                  onClick={() => handleSelectOption(currentSoal.id, char)}
+                  style={{
+                    padding: '12px 15px',
+                    textAlign: 'left',
+                    borderRadius: '6px',
+                    border: isSelected ? '2px solid #0070f3' : '1px solid #ccc',
+                    backgroundColor: isSelected ? '#e6f0ff' : '#fff',
+                    cursor: 'pointer',
+                    fontWeight: isSelected ? 'bold' : 'normal',
+                  }}
                 >
-                  Browser Anda tidak mendukung pemutar audio.
-                </audio>
-              </div>
-            )}
-
-            {/* Pilihan Jawaban */}
-            <div className="grid grid-cols-1 gap-2 text-sm">
-              {[
-                { key: "A", val: q.option_a },
-                { key: "B", val: q.option_b },
-                { key: "C", val: q.option_c },
-                { key: "D", val: q.option_d },
-              ].map((opt) => {
-                const isSelected = selectedAnswers[q.id] === opt.key;
-                let btnStyle = "bg-gray-50 border-gray-200 hover:bg-blue-50 text-gray-700";
-
-                if (isSelected) {
-                  btnStyle = "bg-blue-600 text-white border-blue-600";
-                }
-
-                if (isSubmitted) {
-                  if (opt.key === q.correct_answer) {
-                    btnStyle = "bg-green-600 text-white border-green-600";
-                  } else if (isSelected && opt.key !== q.correct_answer) {
-                    btnStyle = "bg-red-500 text-white border-red-500";
-                  }
-                }
-
-                return (
-                  <button
-                    key={opt.key}
-                    disabled={isSubmitted}
-                    onClick={() => handleSelectAnswer(q.id, opt.key)}
-                    className={`w-full text-left p-3 rounded-lg border transition-all flex items-center justify-between ${btnStyle}`}
-                  >
-                    <span>
-                      <strong className="mr-2">{opt.key}.</strong> {opt.val}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+                  {opsi}
+                </button>
+              )
+            })}
           </div>
-        ))}
+        </div>
 
-        {/* Tombol Submit */}
-        {!loading && !isSubmitted && questions.length > 0 && (
+        {/* Navigasi Soal */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <button
-            onClick={handleManualSubmit}
-            className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-md transition-all"
+            onClick={() => setCurrentIndex((prev) => Math.max(0, prev - 1))}
+            disabled={currentIndex === 0}
+            style={{ padding: '10px 20px', borderRadius: '6px', border: '1px solid #ccc', cursor: currentIndex === 0 ? 'not-allowed' : 'pointer' }}
           >
-            Selesai & Hitung Skor
+            Sebelumnya
           </button>
-        )}
 
-      </div>
+          {currentIndex < 49 ? (
+            <button
+              onClick={() => setCurrentIndex((prev) => Math.min(49, prev + 1))}
+              style={{ padding: '10px 20px', backgroundColor: '#0070f3', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+            >
+              Selanjutnya
+            </button>
+          ) : (
+            <button
+              onClick={handleSubmitAllAnswers}
+              disabled={loading}
+              style={{ padding: '10px 20px', backgroundColor: '#28a745', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}
+            >
+              {loading ? 'Mengirim...' : 'Selesai & Kirim Jawaban'}
+            </button>
+          )}
+        </div>
+      </main>
+    )
+  }
+
+  // ================= TAMPILAN 3: SELESAI =================
+  return (
+    <main style={{ padding: '50px 20px', textAlign: 'center', fontFamily: 'sans-serif' }}>
+      <h1>Tes Listening Selesai!</h1>
+      <p>Jawaban Anda telah berhasil disimpan ke database.</p>
     </main>
-  );
+  )
 }

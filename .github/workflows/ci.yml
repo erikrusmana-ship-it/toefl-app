@@ -36,6 +36,11 @@ jobs:
       - name: TypeScript type check
         run: npx tsc --noEmit > tsc.txt 2>&1 || true
 
+      - name: Start Next.js (production)
+        run: |
+          nohup npm run start > next.log 2>&1 &
+          npx wait-on http://localhost:3000 --timeout 60000
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium > playwright_install.txt 2>&1 || true
 

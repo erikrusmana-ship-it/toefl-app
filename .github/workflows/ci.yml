@@ -32,3 +32,9 @@ jobs:
 
       - name: TypeScript type check
         run: npx tsc --noEmit
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests (Playwright)
+        run: node tests/e2e.spec.js

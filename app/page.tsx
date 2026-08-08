@@ -754,7 +754,7 @@ export default function HomePage() {
           <div style={landingLogoFrame}>
             <img src="/logo-unpas.png" alt="Logo UNPAS" style={{ width: 300, height: 300, objectFit: 'contain' }} />
           </div>
-          <h1 style={landingTitle}>TOEFL ITP Online Test</h1>
+          <h1 style={landingTitle}>English Proficiency Test</h1>
           <p style={landingSubtitle}>Laboratorium Prodi Sastra Inggris UNPAS</p>
 
           <div style={testSummaryGrid}>
@@ -769,7 +769,7 @@ export default function HomePage() {
               <li>Gunakan Google Chrome dan izinkan mode fullscreen.</li>
               <li>Siapkan headset atau earphone untuk Section Listening.</li>
               <li>Jangan membuka tab, jendela, atau aplikasi lain selama tes.</li>
-              <li>Kode akses dapat digunakan berkali-kali selama masih aktif.</li>
+              <li>Kode akses hanya bisa digunakan satu kali.</li>
             </ul>
           </div>
 
@@ -918,7 +918,7 @@ export default function HomePage() {
       <div style={testBanner}>
         <img src="/logo-unpas.png" alt="Logo UNPAS" style={{ width: 56, height: 56, objectFit: 'contain', background: '#fff', borderRadius: 10, padding: 4 }} />
         <div>
-          <strong style={{ display: 'block', fontSize: 16 }}>TOEFL ITP Online Test</strong>
+          <strong style={{ display: 'block', fontSize: 16 }}>English Proficiency Test</strong>
           <span style={{ fontSize: 13, opacity: 0.9 }}>Laboratorium Prodi Sastra Inggris UNPAS</span>
         </div>
         <span style={antiCheatBadge}>Anti-cheating aktif · {violationCount}/2</span>

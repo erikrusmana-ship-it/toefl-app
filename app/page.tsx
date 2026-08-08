@@ -13,12 +13,12 @@ const CONVERSION_LISTENING = [31, 31, 31, 31, 31, 31, 31, 31, 32, 32, 33, 34, 35
 const CONVERSION_STRUCTURE = [31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 33, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 60, 61, 63, 65, 66, 67, 68, 68]
 const CONVERSION_READING = [31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 67, 67]
 
-type Step = 'biodata' | 'listening' | 'structure' | 'reading' | 'selesai'
+type Step = 'access' | 'biodata' | 'listening' | 'structure' | 'reading' | 'selesai'
 type Answers = Record<number, string>
 type ListeningPart = 'PART A' | 'PART B' | 'PART C'
 type ListeningGroup = { title: string; audio: string; firstQuestion: number; lastQuestion: number }
 type ViolationType = 'TAB_HIDDEN' | 'WINDOW_BLUR' | 'FULLSCREEN_EXIT'
-type AntiCheatViolation = { type: ViolationType; label: string; occurredAt: string; section: Exclude<Step, 'biodata' | 'selesai'> }
+type AntiCheatViolation = { type: ViolationType; label: string; occurredAt: string; section: Exclude<Step, 'access' | 'biodata' | 'selesai'> }
 
 const VIOLATION_LABELS: Record<ViolationType, string> = {
   TAB_HIDDEN: 'Membuka tab lain atau meminimalkan browser',
@@ -442,12 +442,13 @@ function pilihSoalTes(data: SoalItem[], kataKunci: string, maksimum: number): So
 }
 
 export default function HomePage() {
+  const [accessCode, setAccessCode] = useState('')
   const [nama, setNama] = useState('')
   const [npm, setNpm] = useState('')
   const [prodi, setProdi] = useState('')
   const [email, setEmail] = useState('')
   const [pesertaId, setPesertaId] = useState<number | null>(null)
-  const [step, setStep] = useState<Step>('biodata')
+  const [step, setStep] = useState<Step>('access')
   const [index, setIndex] = useState(0)
   const [loading, setLoading] = useState(false)
   const [isFetching, setIsFetching] = useState(true)
@@ -471,7 +472,31 @@ export default function HomePage() {
   const submitRef = useRef<() => void>(() => undefined)
   const readingBelumTersedia = reading.length === 0
 
+  const verifyAccessCode = async (event: FormEvent) => {
+    event.preventDefault()
+    const normalizedCode = accessCode.trim().toUpperCase()
+    if (!normalizedCode) return
+
+    setLoading(true)
+    const { data, error } = await supabase.rpc('is_access_code_available', { p_code: normalizedCode })
+    setLoading(false)
+
+    if (error) {
+      alert(`Gagal memeriksa kode akses: ${error.message}`)
+      return
+    }
+    if (!data) {
+      alert('Kode akses tidak valid, sudah digunakan, atau sudah dinonaktifkan.')
+      return
+    }
+
+    setAccessCode(normalizedCode)
+    setStep('biodata')
+  }
+
   useEffect(() => {
+    if (step !== 'biodata') return
+
     const load = async () => {
       const { data, error } = await supabase.from('soal').select('*').order('id', { ascending: true })
       if (error) {
@@ -485,7 +510,7 @@ export default function HomePage() {
       setIsFetching(false)
     }
     load()
-  }, [])
+  }, [step])
 
   const start = async (event: FormEvent) => {
     event.preventDefault()
@@ -518,18 +543,21 @@ export default function HomePage() {
     setAntiCheatWarning(null)
 
     setLoading(true)
-    const { data, error } = await supabase
-      .from('peserta')
-      .insert([{ nama, npm, prodi, email }])
-      .select()
-      .single()
+    const { data, error } = await supabase.rpc('create_participant_with_access_code', {
+      p_code: accessCode,
+      p_nama: nama.trim(),
+      p_npm: npm.trim(),
+      p_prodi: prodi.trim(),
+      p_email: email.trim().toLowerCase(),
+    })
     setLoading(false)
     if (error) {
       if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
-      return alert(`Gagal menyimpan biodata: ${error.message}`)
+      if (error.message.toLowerCase().includes('kode akses')) setStep('access')
+      return alert(`Gagal memulai tes: ${error.message}`)
     }
 
-    setPesertaId(data.id)
+    setPesertaId(Number(data))
     setIndex(0)
     setDirectionAudioFinished(false)
     setListeningDirection('PART A')
@@ -666,7 +694,7 @@ export default function HomePage() {
   }, [step])
 
   useEffect(() => {
-    if (step === 'biodata' || step === 'selesai') return
+    if (step === 'access' || step === 'biodata' || step === 'selesai') return
 
     const handleVisibility = () => {
       if (document.visibilityState === 'hidden') recordViolation('TAB_HIDDEN')
@@ -719,6 +747,60 @@ export default function HomePage() {
     }
   }
 
+  if (step === 'access') {
+    return (
+      <main style={landingPage}>
+        <section style={landingHero}>
+          <div style={landingLogoFrame}>
+            <img src="/logo-unpas.png" alt="Logo UNPAS" style={{ width: 300, height: 300, objectFit: 'contain' }} />
+          </div>
+          <h1 style={landingTitle}>TOEFL ITP Online Test</h1>
+          <p style={landingSubtitle}>Laboratorium Prodi Sastra Inggris UNPAS</p>
+
+          <div style={testSummaryGrid}>
+            <div style={summaryItem}><strong>120 menit</strong><span>Total durasi tes</span></div>
+            <div style={summaryItem}><strong>3 section</strong><span>Listening, Structure, Reading</span></div>
+            <div style={summaryItem}><strong>140 soal</strong><span>50 + 40 + 50 soal</span></div>
+          </div>
+
+          <div style={rulesPanel}>
+            <strong>Aturan sebelum memulai</strong>
+            <ul style={{ margin: '10px 0 0', paddingLeft: 20, lineHeight: 1.7 }}>
+              <li>Gunakan Google Chrome dan izinkan mode fullscreen.</li>
+              <li>Siapkan headset atau earphone untuk Section Listening.</li>
+              <li>Jangan membuka tab, jendela, atau aplikasi lain selama tes.</li>
+              <li>Kode akses hanya berlaku untuk satu peserta dan satu kali tes.</li>
+            </ul>
+          </div>
+
+          <div style={accessCard}>
+            <span style={accessTab}>Masukkan Kode</span>
+            <h2 style={{ margin: '18px 0 6px', color: '#4c1d95' }}>Kode Akses Tes</h2>
+            <p style={{ margin: '0 0 18px', color: '#6b7280' }}>Masukkan kode yang diberikan oleh administrator.</p>
+            <form onSubmit={verifyAccessCode} style={form}>
+              <label style={fieldLabel}>
+                Kode Akses
+                <input
+                  required
+                  autoCapitalize="characters"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={accessCode}
+                  onChange={(event) => setAccessCode(event.target.value.toUpperCase())}
+                  placeholder="Contoh: UNPAS-AB12-CD34-EF56-GH78"
+                  style={{ ...input, textAlign: 'center', letterSpacing: 1.2, fontWeight: 700 }}
+                />
+              </label>
+              <button type="submit" disabled={loading} style={purpleButton(loading)}>
+                {loading ? 'Memeriksa kode...' : 'Lanjutkan'}
+              </button>
+            </form>
+          </div>
+        </section>
+      </main>
+    )
+  }
+
   if (step === 'biodata') {
     return (
       <main style={centerPage}>
@@ -727,6 +809,7 @@ export default function HomePage() {
             <img src="/logo-unpas.png" alt="Logo UNPAS" style={{ display: 'block', width: 330, height: 330, objectFit: 'contain', flex: '0 0 auto' }} />
           </div>
           <h2 style={{ color: '#4c1d95', textAlign: 'center' }}>Form Peserta Tes TOEFL</h2>
+          <p style={{ marginTop: -4, textAlign: 'center', color: '#166534', fontWeight: 700 }}>Kode akses diterima</p>
           {isFetching ? <p style={{ textAlign: 'center' }}>Memuat bank soal...</p> : (
             <form onSubmit={start} style={form}>
               <label style={fieldLabel}>Nama Lengkap<input required autoComplete="name" value={nama} onChange={(e) => setNama(e.target.value)} placeholder="Masukkan nama lengkap" style={input} /></label>
@@ -945,6 +1028,16 @@ export default function HomePage() {
 }
 
 const centerPage: CSSProperties = { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: '#f5f3ff', fontFamily: 'system-ui, sans-serif' }
+const landingPage: CSSProperties = { minHeight: '100vh', padding: '32px 20px 56px', background: 'linear-gradient(180deg, #f5f3ff 0%, #ffffff 70%)', color: '#1f2937', fontFamily: 'system-ui, sans-serif' }
+const landingHero: CSSProperties = { width: '100%', maxWidth: 860, margin: '0 auto', textAlign: 'center' }
+const landingLogoFrame: CSSProperties = { height: 210, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }
+const landingTitle: CSSProperties = { margin: '6px 0 4px', color: '#4c1d95', fontSize: 'clamp(30px, 5vw, 48px)', lineHeight: 1.15 }
+const landingSubtitle: CSSProperties = { margin: 0, color: '#6d28d9', fontSize: 'clamp(16px, 2.5vw, 20px)', fontWeight: 700 }
+const testSummaryGrid: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12, margin: '28px 0 16px' }
+const summaryItem: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, padding: 16, border: '1px solid #ddd6fe', borderRadius: 12, background: '#fff', boxShadow: '0 6px 20px -16px rgba(76,29,149,.6)' }
+const rulesPanel: CSSProperties = { maxWidth: 660, margin: '0 auto 24px', padding: 18, borderRadius: 12, background: '#fffbeb', border: '1px solid #fbbf24', color: '#78350f', textAlign: 'left' }
+const accessCard: CSSProperties = { maxWidth: 520, margin: '0 auto', padding: 28, borderRadius: 16, borderTop: '6px solid #7c3aed', background: '#fff', boxShadow: '0 18px 40px -20px rgba(76,29,149,.45)', textAlign: 'left' }
+const accessTab: CSSProperties = { display: 'inline-block', padding: '7px 14px', borderRadius: 999, background: '#ede9fe', color: '#5b21b6', fontSize: 13, fontWeight: 800 }
 const testPage: CSSProperties = { minHeight: '100vh', margin: '0 auto', padding: 20, background: '#fff', color: '#1f2937', fontFamily: 'system-ui, sans-serif' }
 const card: CSSProperties = { width: '100%', maxWidth: 520, padding: 32, borderRadius: 16, borderTop: '6px solid #7c3aed', background: '#fff', boxShadow: '0 10px 25px -5px rgba(124,58,237,.15)' }
 const logoFrame: CSSProperties = { height: 190, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', margin: '0 auto 8px' }

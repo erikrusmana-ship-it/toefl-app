@@ -486,7 +486,7 @@ export default function HomePage() {
       return
     }
     if (!data) {
-      alert('Kode akses tidak valid, sudah digunakan, atau sudah dinonaktifkan.')
+      alert('Kode akses tidak valid atau sudah dinonaktifkan.')
       return
     }
 
@@ -769,7 +769,7 @@ export default function HomePage() {
               <li>Gunakan Google Chrome dan izinkan mode fullscreen.</li>
               <li>Siapkan headset atau earphone untuk Section Listening.</li>
               <li>Jangan membuka tab, jendela, atau aplikasi lain selama tes.</li>
-              <li>Kode akses hanya berlaku untuk satu peserta dan satu kali tes.</li>
+              <li>Kode akses dapat digunakan berkali-kali selama masih aktif.</li>
             </ul>
           </div>
 

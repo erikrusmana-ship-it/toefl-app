@@ -23,6 +23,13 @@ interface ResultPayload {
     structure: number
     reading: number
   }
+  violations: Array<{
+    type: string
+    label: string
+    occurredAt: string
+    section: string
+  }>
+  statusTes: 'selesai' | 'dihentikan_pelanggaran'
 }
 
 function escapeHtml(value: unknown): string {
@@ -42,6 +49,12 @@ function validNumber(value: unknown): value is number {
 function isValidPayload(payload: Partial<ResultPayload>): payload is ResultPayload {
   const result = payload.result
   const totals = payload.questionTotals
+  const violationsAreValid = Array.isArray(payload.violations) && payload.violations.length <= 10 && payload.violations.every((violation) => (
+    typeof violation?.type === 'string' && violation.type.length <= 40 &&
+    typeof violation?.label === 'string' && violation.label.length <= 160 &&
+    typeof violation?.occurredAt === 'string' && !Number.isNaN(Date.parse(violation.occurredAt)) &&
+    typeof violation?.section === 'string' && violation.section.length <= 20
+  ))
 
   return Boolean(
     Number.isInteger(payload.participantId) && Number(payload.participantId) > 0 &&
@@ -51,7 +64,9 @@ function isValidPayload(payload: Partial<ResultPayload>): payload is ResultPaylo
     validNumber(result.rawS) && validNumber(result.scaledS) &&
     validNumber(result.rawR) && validNumber(result.scaledR) &&
     validNumber(result.totalScore) && result.cefr?.trim() &&
-    validNumber(totals.listening) && validNumber(totals.structure) && validNumber(totals.reading)
+    validNumber(totals.listening) && validNumber(totals.structure) && validNumber(totals.reading) &&
+    violationsAreValid &&
+    (payload.statusTes === 'selesai' || payload.statusTes === 'dihentikan_pelanggaran')
   )
 }
 
@@ -70,12 +85,28 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid result data.' }, { status: 400 })
   }
 
-  const { participantId, nama, npm, prodi, email, result, questionTotals } = payload
+  const { participantId, nama, npm, prodi, email, result, questionTotals, violations, statusTes } = payload
   const submittedAt = new Date().toLocaleString('id-ID', {
     timeZone: 'Asia/Jakarta',
     dateStyle: 'full',
     timeStyle: 'long',
   })
+  const testStatusLabel = statusTes === 'dihentikan_pelanggaran'
+    ? 'Dihentikan otomatis karena pelanggaran kedua'
+    : 'Selesai normal'
+  const violationRows = violations.map((violation, violationIndex) => {
+    const occurredAt = new Date(violation.occurredAt).toLocaleString('id-ID', {
+      timeZone: 'Asia/Jakarta',
+      dateStyle: 'medium',
+      timeStyle: 'medium',
+    })
+    return `<tr>
+      <td style="padding:8px;border:1px solid #ddd">${violationIndex + 1}</td>
+      <td style="padding:8px;border:1px solid #ddd">${escapeHtml(violation.label)}</td>
+      <td style="padding:8px;border:1px solid #ddd">${escapeHtml(violation.section)}</td>
+      <td style="padding:8px;border:1px solid #ddd">${escapeHtml(occurredAt)}</td>
+    </tr>`
+  }).join('')
 
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -88,7 +119,7 @@ export async function POST(request: Request) {
       from: 'TOEFL UNPAS <onboarding@resend.dev>',
       to: [RESULT_RECIPIENT],
       reply_to: email,
-      subject: `Hasil TOEFL — ${nama} (${npm})`,
+      subject: `${statusTes === 'dihentikan_pelanggaran' ? '[PELANGGARAN] ' : ''}Hasil TOEFL — ${nama} (${npm})`,
       html: `
         <div style="font-family:Arial,sans-serif;max-width:680px;margin:auto;color:#1f2937">
           <h2 style="color:#4c1d95">Hasil Tes TOEFL ITP</h2>
@@ -98,6 +129,8 @@ export async function POST(request: Request) {
             <tr><td style="padding:7px;border-bottom:1px solid #ddd"><strong>Prodi</strong></td><td style="padding:7px;border-bottom:1px solid #ddd">${escapeHtml(prodi)}</td></tr>
             <tr><td style="padding:7px;border-bottom:1px solid #ddd"><strong>Email</strong></td><td style="padding:7px;border-bottom:1px solid #ddd">${escapeHtml(email)}</td></tr>
             <tr><td style="padding:7px;border-bottom:1px solid #ddd"><strong>Waktu selesai</strong></td><td style="padding:7px;border-bottom:1px solid #ddd">${escapeHtml(submittedAt)}</td></tr>
+            <tr><td style="padding:7px;border-bottom:1px solid #ddd"><strong>Status tes</strong></td><td style="padding:7px;border-bottom:1px solid #ddd">${escapeHtml(testStatusLabel)}</td></tr>
+            <tr><td style="padding:7px;border-bottom:1px solid #ddd"><strong>Jumlah pelanggaran</strong></td><td style="padding:7px;border-bottom:1px solid #ddd">${violations.length}</td></tr>
           </table>
           <table style="width:100%;border-collapse:collapse;text-align:center">
             <thead><tr style="background:#ede9fe"><th style="padding:10px;border:1px solid #ddd">Section</th><th style="padding:10px;border:1px solid #ddd">Benar</th><th style="padding:10px;border:1px solid #ddd">Konversi</th></tr></thead>
@@ -112,6 +145,13 @@ export async function POST(request: Request) {
             <div style="font-size:42px;font-weight:bold;color:#581c87">${result.totalScore}</div>
             <div><strong>CEFR:</strong> ${escapeHtml(result.cefr)}</div>
           </div>
+          ${violations.length ? `
+            <h3 style="margin-top:26px;color:#991b1b">Catatan Pelanggaran</h3>
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+              <thead><tr style="background:#fee2e2"><th style="padding:8px;border:1px solid #ddd">No.</th><th style="padding:8px;border:1px solid #ddd">Pelanggaran</th><th style="padding:8px;border:1px solid #ddd">Section</th><th style="padding:8px;border:1px solid #ddd">Waktu</th></tr></thead>
+              <tbody>${violationRows}</tbody>
+            </table>
+          ` : '<p style="margin-top:24px;color:#166534"><strong>Tidak ada pelanggaran anti-cheating.</strong></p>'}
         </div>
       `,
     }),

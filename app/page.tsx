@@ -17,6 +17,23 @@ type Step = 'biodata' | 'listening' | 'structure' | 'reading' | 'selesai'
 type Answers = Record<number, string>
 type ListeningPart = 'PART A' | 'PART B' | 'PART C'
 type ListeningGroup = { title: string; audio: string; firstQuestion: number; lastQuestion: number }
+type ViolationType = 'TAB_HIDDEN' | 'WINDOW_BLUR' | 'FULLSCREEN_EXIT'
+type AntiCheatViolation = { type: ViolationType; label: string; occurredAt: string; section: Exclude<Step, 'biodata' | 'selesai'> }
+
+const VIOLATION_LABELS: Record<ViolationType, string> = {
+  TAB_HIDDEN: 'Membuka tab lain atau meminimalkan browser',
+  WINDOW_BLUR: 'Membuka jendela atau aplikasi lain',
+  FULLSCREEN_EXIT: 'Keluar dari mode fullscreen',
+}
+
+function isGoogleChrome(): boolean {
+  const userAgent = navigator.userAgent
+  const isChrome = /Chrome\//.test(userAgent) || /CriOS\//.test(userAgent)
+  const isOtherChromium = /Edg\//.test(userAgent) || /EdgiOS\//.test(userAgent) || /OPR\//.test(userAgent) || /Opera/.test(userAgent) || /SamsungBrowser\//.test(userAgent)
+  const hasBraveApi = 'brave' in navigator
+
+  return isChrome && !isOtherChromium && !hasBraveApi
+}
 
 const LISTENING_DIRECTIONS: Record<ListeningPart, { title: string; audio: string; text: string }> = {
   'PART A': {
@@ -444,7 +461,14 @@ export default function HomePage() {
   const [listeningDirection, setListeningDirection] = useState<ListeningPart | null>(null)
   const [listeningGroup, setListeningGroup] = useState<ListeningGroup | null>(null)
   const [directionAudioFinished, setDirectionAudioFinished] = useState(false)
+  const [antiCheatWarning, setAntiCheatWarning] = useState<AntiCheatViolation | null>(null)
+  const [violationCount, setViolationCount] = useState(0)
   const submitting = useRef(false)
+  const violationsRef = useRef<AntiCheatViolation[]>([])
+  const antiCheatActiveRef = useRef(false)
+  const lastViolationAtRef = useRef(0)
+  const forcedTerminationRef = useRef(false)
+  const submitRef = useRef<() => void>(() => undefined)
   const readingBelumTersedia = reading.length === 0
 
   useEffect(() => {
@@ -470,6 +494,29 @@ export default function HomePage() {
       return
     }
 
+    if (!isGoogleChrome()) {
+      alert('Tes hanya dapat dimulai menggunakan Google Chrome. Silakan buka kembali halaman ini di Google Chrome.')
+      return
+    }
+
+    if (!document.fullscreenEnabled) {
+      alert('Perangkat atau browser ini tidak mendukung mode fullscreen yang diwajibkan untuk tes.')
+      return
+    }
+
+    try {
+      await document.documentElement.requestFullscreen({ navigationUI: 'hide' })
+    } catch {
+      alert('Fullscreen harus diizinkan untuk memulai tes. Klik Mulai Tes TOEFL lalu pilih Izinkan jika diminta.')
+      return
+    }
+
+    violationsRef.current = []
+    forcedTerminationRef.current = false
+    lastViolationAtRef.current = Date.now()
+    setViolationCount(0)
+    setAntiCheatWarning(null)
+
     setLoading(true)
     const { data, error } = await supabase
       .from('peserta')
@@ -477,12 +524,16 @@ export default function HomePage() {
       .select()
       .single()
     setLoading(false)
-    if (error) return alert(`Gagal menyimpan biodata: ${error.message}`)
+    if (error) {
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
+      return alert(`Gagal menyimpan biodata: ${error.message}`)
+    }
 
     setPesertaId(data.id)
     setIndex(0)
     setDirectionAudioFinished(false)
     setListeningDirection('PART A')
+    antiCheatActiveRef.current = true
     setStep('listening')
   }
 
@@ -509,8 +560,11 @@ export default function HomePage() {
   const submit = useCallback(async () => {
     if (!pesertaId || submitting.current) return
     submitting.current = true
+    antiCheatActiveRef.current = false
     setLoading(true)
     const result = hitungSkor()
+    const violations = [...violationsRef.current]
+    const statusTes = forcedTerminationRef.current ? 'dihentikan_pelanggaran' : 'selesai'
     const allQuestions = [...listening, ...structure, ...reading]
     const allAnswers = { ...answersListening, ...answersStructure, ...answersReading }
     const payload = allQuestions.map((s) => ({
@@ -529,8 +583,22 @@ export default function HomePage() {
     if (answerError || participantError) {
       alert(`Gagal menyimpan hasil: ${answerError?.message || participantError?.message}`)
       submitting.current = false
+      antiCheatActiveRef.current = true
       setLoading(false)
       return
+    }
+
+    const { error: antiCheatStorageError } = await supabase
+      .from('peserta')
+      .update({
+        pelanggaran_count: violations.length,
+        pelanggaran_detail: violations,
+        status_tes: statusTes,
+      })
+      .eq('id', pesertaId)
+
+    if (antiCheatStorageError) {
+      console.error('Detail pelanggaran belum tersimpan. Jalankan migrasi anti-cheating di Supabase:', antiCheatStorageError.message)
     }
 
     try {
@@ -549,6 +617,8 @@ export default function HomePage() {
             structure: structure.length,
             reading: reading.length,
           },
+          violations,
+          statusTes,
         }),
       })
 
@@ -558,8 +628,96 @@ export default function HomePage() {
     }
 
     setLoading(false)
+    if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
     setStep('selesai')
   }, [pesertaId, nama, npm, prodi, email, hitungSkor, listening, structure, reading, answersListening, answersStructure, answersReading])
+
+  useEffect(() => {
+    submitRef.current = () => { void submit() }
+  }, [submit])
+
+  const recordViolation = useCallback((type: ViolationType) => {
+    if (!antiCheatActiveRef.current || submitting.current) return
+
+    const now = Date.now()
+    if (now - lastViolationAtRef.current < 1800) return
+    lastViolationAtRef.current = now
+
+    const violation: AntiCheatViolation = {
+      type,
+      label: VIOLATION_LABELS[type],
+      occurredAt: new Date(now).toISOString(),
+      section: step as AntiCheatViolation['section'],
+    }
+    const violations = [...violationsRef.current, violation]
+    violationsRef.current = violations
+    setViolationCount(violations.length)
+
+    if (violations.length >= 2) {
+      antiCheatActiveRef.current = false
+      forcedTerminationRef.current = true
+      setAntiCheatWarning(null)
+      alert('Pelanggaran kedua terdeteksi. Tes dihentikan dan hasil yang telah dikerjakan akan dikirim otomatis.')
+      submitRef.current()
+      return
+    }
+
+    setAntiCheatWarning(violation)
+  }, [step])
+
+  useEffect(() => {
+    if (step === 'biodata' || step === 'selesai') return
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') recordViolation('TAB_HIDDEN')
+    }
+    const handleBlur = () => {
+      window.setTimeout(() => {
+        if (!document.hasFocus()) recordViolation('WINDOW_BLUR')
+      }, 0)
+    }
+    const handleFullscreen = () => {
+      if (!document.fullscreenElement) recordViolation('FULLSCREEN_EXIT')
+    }
+    const blockContextMenu = (event: MouseEvent) => event.preventDefault()
+    const blockClipboard = (event: ClipboardEvent) => event.preventDefault()
+    const blockShortcut = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase()
+      const blockedWithModifier = ['c', 'v', 'x', 'p', 's', 'u', 'a', 't', 'n', 'w', 'l'].includes(key)
+      if ((event.ctrlKey || event.metaKey) && blockedWithModifier) event.preventDefault()
+      if (event.key === 'F12' || (event.ctrlKey && event.shiftKey && ['i', 'j', 'c'].includes(key))) event.preventDefault()
+    }
+
+    document.addEventListener('visibilitychange', handleVisibility)
+    document.addEventListener('fullscreenchange', handleFullscreen)
+    document.addEventListener('contextmenu', blockContextMenu)
+    document.addEventListener('copy', blockClipboard)
+    document.addEventListener('cut', blockClipboard)
+    document.addEventListener('paste', blockClipboard)
+    window.addEventListener('blur', handleBlur)
+    window.addEventListener('keydown', blockShortcut, true)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility)
+      document.removeEventListener('fullscreenchange', handleFullscreen)
+      document.removeEventListener('contextmenu', blockContextMenu)
+      document.removeEventListener('copy', blockClipboard)
+      document.removeEventListener('cut', blockClipboard)
+      document.removeEventListener('paste', blockClipboard)
+      window.removeEventListener('blur', handleBlur)
+      window.removeEventListener('keydown', blockShortcut, true)
+    }
+  }, [recordViolation, step])
+
+  const resumeAfterWarning = async () => {
+    try {
+      if (!document.fullscreenElement) await document.documentElement.requestFullscreen({ navigationUI: 'hide' })
+      lastViolationAtRef.current = Date.now()
+      setAntiCheatWarning(null)
+    } catch {
+      alert('Anda harus mengizinkan fullscreen untuk kembali mengerjakan tes.')
+    }
+  }
 
   if (step === 'biodata') {
     return (
@@ -575,6 +733,10 @@ export default function HomePage() {
               <label style={fieldLabel}>NPM<input required inputMode="numeric" value={npm} onChange={(e) => setNpm(e.target.value)} placeholder="Masukkan NPM" style={input} /></label>
               <label style={fieldLabel}>Prodi<input required value={prodi} onChange={(e) => setProdi(e.target.value)} placeholder="Masukkan program studi" style={input} /></label>
               <label style={fieldLabel}>Alamat Email<input required type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nama@email.com" style={input} /></label>
+              <div style={antiCheatNotice}>
+                <strong>Aturan anti-cheating</strong>
+                <span>Gunakan Google Chrome dan izinkan fullscreen. Membuka tab, jendela, atau aplikasi lain dihitung sebagai pelanggaran. Pelanggaran kedua akan mengakhiri tes otomatis.</span>
+              </div>
               <button type="submit" disabled={loading} style={purpleButton(loading)}>{loading ? 'Menyimpan...' : 'Mulai Tes TOEFL'}</button>
             </form>
           )}
@@ -657,12 +819,26 @@ export default function HomePage() {
 
   return (
     <main style={{ ...testPage, maxWidth: isReading ? 900 : 700 }}>
+      {antiCheatWarning && (
+        <div style={antiCheatOverlay} role="alertdialog" aria-modal="true" aria-labelledby="anti-cheat-title">
+          <div style={antiCheatDialog}>
+            <div style={warningIcon}>!</div>
+            <h2 id="anti-cheat-title" style={{ margin: 0, color: '#991b1b' }}>Peringatan Pelanggaran 1 dari 2</h2>
+            <p style={{ margin: 0, lineHeight: 1.6 }}><strong>Terdeteksi:</strong> {antiCheatWarning.label}.</p>
+            <p style={{ margin: 0, color: '#4b5563', lineHeight: 1.6 }}>Kembali ke tes dalam mode fullscreen. Jika terjadi satu pelanggaran lagi, tes akan dihentikan dan hasil dikirim otomatis.</p>
+            <button type="button" onClick={() => { void resumeAfterWarning() }} style={{ ...purpleButton(false), width: '100%' }}>
+              Kembali ke Tes dalam Fullscreen
+            </button>
+          </div>
+        </div>
+      )}
       <div style={testBanner}>
         <img src="/logo-unpas.png" alt="Logo UNPAS" style={{ width: 56, height: 56, objectFit: 'contain', background: '#fff', borderRadius: 10, padding: 4 }} />
         <div>
           <strong style={{ display: 'block', fontSize: 16 }}>TOEFL ITP Online Test</strong>
           <span style={{ fontSize: 13, opacity: 0.9 }}>Laboratorium Prodi Sastra Inggris UNPAS</span>
         </div>
+        <span style={antiCheatBadge}>Anti-cheating aktif · {violationCount}/2</span>
       </div>
       <div style={topBar}><div><h3 style={{ margin: 0, color: '#4c1d95' }}>{title}</h3><span>{subtitle}</span></div><Timer seconds={duration} onTimeUp={timeUp} /></div>
       {step === 'listening' && listeningDirection ? (
@@ -775,7 +951,12 @@ const logoFrame: CSSProperties = { height: 190, display: 'flex', alignItems: 'ce
 const form: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 15 }
 const fieldLabel: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 7, color: '#4c1d95', fontSize: 14, fontWeight: 700 }
 const input: CSSProperties = { width: '100%', boxSizing: 'border-box', padding: 12, border: '1px solid #ddd6fe', borderRadius: 8, color: '#111827', fontSize: 15, fontWeight: 400 }
-const testBanner: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, padding: '12px 16px', borderRadius: 12, background: 'linear-gradient(135deg, #4c1d95, #7c3aed)', color: '#fff', boxShadow: '0 8px 18px -10px rgba(76,29,149,.7)' }
+const antiCheatNotice: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 5, padding: 12, border: '1px solid #f59e0b', borderRadius: 8, background: '#fffbeb', color: '#78350f', fontSize: 13, lineHeight: 1.5 }
+const testBanner: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, padding: '12px 16px', borderRadius: 12, background: 'linear-gradient(135deg, #4c1d95, #7c3aed)', color: '#fff', boxShadow: '0 8px 18px -10px rgba(76,29,149,.7)', flexWrap: 'wrap' }
+const antiCheatBadge: CSSProperties = { marginLeft: 'auto', padding: '5px 9px', borderRadius: 999, background: 'rgba(255,255,255,.18)', border: '1px solid rgba(255,255,255,.35)', color: '#fff', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }
+const antiCheatOverlay: CSSProperties = { position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'rgba(17,24,39,.86)' }
+const antiCheatDialog: CSSProperties = { width: '100%', maxWidth: 460, display: 'flex', flexDirection: 'column', gap: 18, padding: 28, borderRadius: 16, borderTop: '7px solid #dc2626', background: '#fff', color: '#1f2937', boxShadow: '0 24px 60px rgba(0,0,0,.35)', textAlign: 'center' }
+const warningIcon: CSSProperties = { width: 54, height: 54, display: 'grid', placeItems: 'center', alignSelf: 'center', borderRadius: '50%', background: '#fee2e2', color: '#b91c1c', fontSize: 32, fontWeight: 900 }
 const topBar: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 20, paddingBottom: 10, marginBottom: 20, borderBottom: '2px solid #f3e8ff' }
 const box: CSSProperties = { padding: 15, borderRadius: 8, background: '#faf5ff', color: '#1f2937', marginBottom: 20 }
 const directionCard: CSSProperties = { padding: 24, border: '1px solid #ddd6fe', borderRadius: 14, background: '#faf5ff', boxShadow: '0 8px 20px -14px rgba(76,29,149,.55)' }

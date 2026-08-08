@@ -15,6 +15,259 @@ const CONVERSION_READING = [31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 
 
 type Step = 'biodata' | 'listening' | 'structure' | 'reading' | 'selesai'
 type Answers = Record<number, string>
+type ListeningPart = 'PART A' | 'PART B' | 'PART C'
+type ListeningGroup = { title: string; audio: string; firstQuestion: number; lastQuestion: number }
+
+const LISTENING_DIRECTIONS: Record<ListeningPart, { title: string; audio: string; text: string }> = {
+  'PART A': {
+    title: 'Part A — Short Conversations',
+    audio: '/audio/listening/directions-part-a.mp3',
+    text: `Practice Test A. Section 1, Listening Comprehension.
+
+In this section of the test, you will have an opportunity to demonstrate your ability to understand conversations and talks in English. There are three parts to this section, with special directions for each part. Answer all the questions on the basis of what is stated or implied by the speakers in this test.
+
+When you take the actual TOEFL test, you will not be allowed to take notes or write in your test book. Try to work on Practice Test A in the same way.
+
+Part A. Directions.
+
+In Part A, you will hear short conversations between two people. After each conversation, you will hear a question about the conversation. The conversations and questions will not be repeated.
+
+After you hear a question, read the four possible answers in your book and choose the best answer. Then, on your answer sheet, find the number of the question and fill in the space that corresponds to the letter of the answer you have chosen.
+
+Here is an example.
+
+On the recording, you hear:
+Woman: I don't like this painting very much.
+Man: Neither do I.
+Narrator: What does the man mean?
+
+In your test book, you read:
+(A) He doesn't like the painting either.
+(B) He doesn't know how to paint.
+(C) He doesn't have any paintings.
+(D) He doesn't know what to do.
+
+You learn from the conversation that neither the man nor the woman likes the painting. The best answer to the question, “What does the man mean?” is (A), “He doesn't like the painting either.” Therefore, the correct choice is (A).
+
+Go on to the next page. Now we will begin Part A with question number one.`,
+  },
+  'PART B': {
+    title: 'Part B — Longer Conversations',
+    audio: '/audio/listening/directions-part-b.mp3',
+    text: `Now read along as the directions for Part B are being read.
+
+Part B. Directions.
+
+In this part of the test, you will hear longer conversations. After each conversation, you will hear several questions. The conversations and questions will not be repeated.
+
+After you hear a question, read the four possible answers in your book and choose the best answer. Then, on your answer sheet, find the number of the question and fill in the space that corresponds to the letter of the answer you have chosen.
+
+Remember, you should not take notes or write in your book.
+
+Go on to the next page.`,
+  },
+  'PART C': {
+    title: 'Part C — Short Talks',
+    audio: '/audio/listening/directions-part-c.mp3',
+    text: `Now read along as the directions for Part C are being read.
+
+Part C. Directions.
+
+In this part of the test, you will hear several short talks. After each talk, you will hear some questions. The talks and the questions will not be repeated.
+
+After you hear a question, read the four possible answers in your book and choose the best answer. Then, on your answer sheet, find the number of the question and fill in the space that corresponds to the letter of the answer you have chosen.
+
+Here is an example.
+
+On the recording, you hear:
+Narrator: Listen to an instructor talk to his class about a television program.
+
+Instructor: I'd like to tell you about an interesting TV program that will be shown this coming Thursday. It will be on from 9 to 10 p.m. on Channel 4. It's part of a series called Mysteries of Human Biology. The subject of the program is the human brain, how it functions, and how it can malfunction. Topics that will be covered are dreams, memory, and depression. These topics are illustrated with outstanding computer animation that makes the explanations easy to follow. Make an effort to see this show. Since we've been studying the nervous system in class, I know you'll find it very helpful.
+
+Now listen to a sample question.
+
+Narrator: What is the main purpose of the program?
+
+In your test book, you read:
+(A) To demonstrate the latest use of computer graphics.
+(B) To discuss the possibility of an economic depression.
+(C) To explain the workings of the brain.
+(D) To dramatize a famous mystery story.
+
+The best answer to the question, “What is the main purpose of the program?” is (C), “To explain the workings of the brain.” Therefore, the correct choice is (C).
+
+Now listen to another sample question.
+
+Narrator: Why does the speaker recommend watching the program?
+
+In your test book, you read:
+(A) It is required of all science majors.
+(B) It will never be shown again.
+(C) It can help viewers improve their memory skills.
+(D) It will help with coursework.
+
+The best answer to the question, “Why does the speaker recommend watching the program?” is (D), “It will help with coursework.” Therefore, the correct choice is (D).
+
+Remember, you should not take notes or write in your book. Go on to the next page.`,
+  },
+}
+
+const LISTENING_GROUPS: Record<number, ListeningGroup> = {
+  31: { title: 'Part B — First Conversation', audio: '/audio/listening/conversation-31-33.mp3', firstQuestion: 31, lastQuestion: 33 },
+  34: { title: 'Part B — Second Conversation', audio: '/audio/listening/conversation-34-37.mp3', firstQuestion: 34, lastQuestion: 37 },
+  38: { title: 'Part C — First Talk', audio: '/audio/listening/talk-38-41.mp3', firstQuestion: 38, lastQuestion: 41 },
+  42: { title: 'Part C — Second Talk', audio: '/audio/listening/talk-42-46.mp3', firstQuestion: 42, lastQuestion: 46 },
+  47: { title: 'Part C — Third Talk', audio: '/audio/listening/talk-47-50.mp3', firstQuestion: 47, lastQuestion: 50 },
+}
+
+const READING_PASSAGE_LINES: Record<string, string[]> = {
+  'Frank Lloyd Wright and Functionalism': [
+    'A distinctively American architecture began with Frank Lloyd Wright, who had',
+    'taken to heart the admonition that form should follow function, and who thought of',
+    'buildings not as separate architectural entities but as parts of an organic whole that',
+    'included the land, the community, and the society. In a very real way the houses of',
+    'colonial New England and some of the southern plantations had been functional, but',
+    'Wright was the first architect to make functionalism the authoritative principle for',
+    'public as well as for domestic buildings. As early as 1906 he built the Unity Temple',
+    'in Oak Park, Illinois, the first of those churches that did so much to revolutionize',
+    'ecclesiastical architecture in the United States. Thereafter he turned his genius to such',
+    'miscellaneous structures as houses, schools, office buildings, and factories, among',
+    'them the famous Larkin Building in Buffalo, New York, and the Johnson Wax',
+    'Company building in Racine, Wisconsin.',
+  ],
+  'Types of Glaciers': [
+    'There are two basic types of glaciers, those that flow outward in all directions with',
+    'little regard for any underlying terrain and those that are confined by terrain to a',
+    'particular path.',
+    'The first category of glaciers includes those massive blankets that cover whole',
+    'continents, appropriately called ice sheets. There must be over 50,000 square',
+    'kilometers of land covered with ice for the glacier to qualify as an ice sheet. When',
+    'portions of an ice sheet spread out over the ocean, they form ice shelves.',
+    'About 20,000 years ago the Cordilleran Ice Sheet covered nearly all the mountains',
+    'in southern Alaska, western Canada, and the western United States. It was about 3',
+    'kilometers deep at its thickest point in northern Alberta. Now there are only two sheets',
+    'left on Earth, those covering Greenland and Antarctica.',
+    'Any domelike body of ice that also flows out in all directions but covers less than',
+    '50,000 square kilometers is called an ice cap. Although ice caps are rare nowadays,',
+    'there are a number in northeastern Canada, on Baffin Island, and on the Queen Elizabeth',
+    'Islands.',
+    'The second category of glaciers includes those of a variety of shapes and sizes',
+    'generally called mountain or alpine glaciers. Mountain glaciers are typically identified',
+    'by the landform that controls their flow. One form of mountain glacier that resembles',
+    'an ice cap in that it flows outward in several directions is called an ice field. The',
+    'difference between an ice field and an ice cap is subtle. Essentially, the flow of an ice',
+    'field is somewhat controlled by surrounding terrain and thus does not have the domelike',
+    'shape of a cap. There are several ice fields in the Wrangell, St. Elias, and Chugach',
+    'mountains of Alaska and northern British Columbia.',
+    'Less spectacular than large ice fields are the most common types of mountain',
+    'glaciers: the cirque and valley glaciers. Cirque glaciers are found in depressions in the',
+    'surface of the land and have a characteristic circular shape. The ice of valley glaciers,',
+    'bound by terrain, flows down valleys, curves around their corners, and falls over cliffs.',
+  ],
+  'Australopithecus robustus and Tool Use': [
+    'Tools and hand bones excavated from the Swartkrans cave complex in South Africa',
+    'suggest that a close relative of early humans known as Australopithecus robustus may',
+    'have made and used primitive tools long before the species became extinct 1 million',
+    "years ago. It may even have made and used primitive tools long before humanity's",
+    'direct ancestor, Homo habilis, or “handy man,” began doing so. Homo habilis and its',
+    'successor, Homo erectus, coexisted with Australopithecus robustus on the plains of',
+    'South Africa for more than a million years.',
+    "The Swartkrans cave in South Africa has been under excavation since the 1940's.",
+    'The earliest fossil-containing layers of sedimentary rock in the cave date from about',
+    '1.9 million years ago and contain extensive remains of animals, primitive tools, and',
+    'two or more species of apelike hominids. The key recent discovery involved bones',
+    'from the hand of Australopithecus robustus, the first time such bones have been found.',
+    'The most important feature of the Australopithecus robustus hand was the pollical',
+    'distal thumb tip, the last bone in the thumb. The bone had an attachment point for a',
+    '“uniquely human” muscle, the flexor pollicis longus, that had previously been found',
+    'only in more recent ancestors. That muscle gave Australopithecus robustus an opposable',
+    'thumb, a feature that would allow them to grip objects, including tools. The researchers',
+    'also found primitive bone and stone implements, especially digging tools, in the same',
+    'layers of sediments.',
+    'Australopithecus robustus were more heavily built—more “robust” in anthropological',
+    'terms—than their successors. They had broad faces, heavy jaws, and massive crushing',
+    'and grinding teeth that were used for eating hard fruits, seeds, and fibrous underground',
+    'plant parts. They walked upright, which would have allowed them to carry and use',
+    'tools. Most experts had previously believed that Homo habilis were able to supplant',
+    "Australopithecus robustus because the former's ability to use tools gave them an innate",
+    'superiority. The discovery that Australopithecus robustus also used tools means that',
+    'researchers will have to seek other explanations for their extinction. Perhaps their',
+    'reliance on naturally occurring plants led to their downfall as the climate became drier',
+    'and cooler, or perhaps Homo habilis, with their bigger brains, were simply able to make more sophisticated tools.',
+  ],
+  'The Changing Focus of Medical Research': [
+    'The first two decades of this century were dominated by the microbe hunters. These',
+    'hunters had tracked down one after another of the microbes responsible for the most',
+    'dreaded scourges of many centuries: tuberculosis, cholera, diphtheria. But there',
+    'remained some terrible diseases for which no microbe could be incriminated: scurvy,',
+    'pellagra, rickets, beriberi. Then it was discovered that these diseases were caused by',
+    'the lack of vitamins, a trace substance in the diet. The diseases could be prevented or',
+    'cured by consuming foods that contained the vitamins. And so in the decades of the',
+    "1920's and 1930's, nutrition became a science and the vitamin hunters replaced the",
+    'microbe hunters.',
+    "In the 1940's and 1950's, biochemists strived to learn why each of the vitamins was",
+    'essential for health. They discovered that key enzymes in metabolism depend on one or',
+    'another of the vitamins as coenzymes to perform the chemistry that provides cells with',
+    'energy for growth and function. Now, these enzyme hunters occupied center stage.',
+    'You are aware that the enzyme hunters have been replaced by a new breed of',
+    'hunters who are tracking genes—the blueprints for each of the enzymes—and are',
+    'discovering the defective genes that cause inherited diseases—diabetes, cystic fibrosis.',
+    'These gene hunters, or genetic engineers, use recombinant DNA technology to identify',
+    'and clone genes and introduce them into bacterial cells and plants to create factories for',
+    'the massive production of hormones and vaccines for medicine and for better crops for',
+    'agriculture. Biotechnology has become a multibillion-dollar industry.',
+    'In view of the inexorable progress in science, we can expect that the gene hunters',
+    'will be replaced in the spotlight. When and by whom? Which kind of hunter will',
+    'dominate the scene in the last decade of our waning century and in the early decades',
+    'of the next? I wonder whether the hunters who will occupy the spotlight will be',
+    'neurobiologists who apply the techniques of the enzyme and gene hunters to the',
+    'functions of the brain. What to call them? The head hunters. I will return to them later.',
+  ],
+  'Industrialization in the United States': [
+    'In the mid-nineteenth century, the United States had tremendous natural resources',
+    'that could be exploited in order to develop heavy industry. Most of the raw materials',
+    'that are valuable in the manufacture of machinery, transportation facilities, and consumer',
+    'goods lay ready to be worked into wealth. Iron, coal, and oil—the basic ingredients of',
+    'industrial growth—were plentiful and needed only the application of technical expertise,',
+    'organizational skill, and labor.',
+    'One crucial development in this movement toward industrialization was the growth',
+    'of the railroads. The railway network expanded rapidly until the railroad map of the',
+    "United States looked like a spider's web, with the steel filaments connecting all important",
+    'sources of raw materials, their places of manufacture, and their centers of distribution.',
+    'The railroads contributed to the industrial growth not only by connecting these major',
+    'centers, but also by themselves consuming enormous amounts of fuel, iron, and coal.',
+    'Many factors influenced emerging modes of production. For example, machine',
+    'tools, the tools used to make goods, were steadily improved in the latter part of the',
+    'nineteenth century—always with an eye to speedier production and lower unit costs.',
+    'The products of the factories were rapidly absorbed by the growing cities that sheltered',
+    'the workers and the distributors. The increased urban population was nourished by the',
+    'increased farm production that, in turn, was made more productive by the use of the',
+    'new farm machinery. American agricultural production kept up with the urban demand',
+    'and still had surpluses for sale to the industrial centers of Europe.',
+    'The labor that ran the factories and built the railways was recruited in part from',
+    'American farm areas where people were being displaced by farm machinery, in part',
+    'from Asia, and in part from Europe. Europe now began to send tides of immigrants',
+    'from eastern and southern Europe—most of whom were originally poor farmers but',
+    'who settled in American industrial cities. The money to finance this tremendous',
+    'expansion of the American economy still came from European financiers for the most',
+    'part, but the Americans were approaching the day when their expansion could be',
+    'financed in their own “money market.”',
+  ],
+}
+
+const READING_PARAGRAPH_STARTS: Record<string, number[]> = {
+  'Frank Lloyd Wright and Functionalism': [1],
+  'Types of Glaciers': [1, 4, 8, 12, 16, 24],
+  'Australopithecus robustus and Tool Use': [1, 8, 13, 20],
+  'The Changing Focus of Medical Research': [1, 10, 14, 21],
+  'Industrialization in the United States': [1, 7, 13, 21],
+}
+
+function listeningPart(soal: SoalItem): ListeningPart {
+  if (soal.nomor_soal >= 31 && soal.nomor_soal <= 37) return 'PART B'
+  if (soal.nomor_soal >= 38) return 'PART C'
+  return 'PART A'
+}
 
 interface SoalItem {
   id: number
@@ -105,6 +358,43 @@ function WrittenExpressionQuestion({ text, options }: { text: string; options: A
   return <p style={{ lineHeight: 1.9, marginBottom: 0 }}>{result}</p>
 }
 
+function ReadingPassage({ title, text }: { title?: string; text?: string }) {
+  const lines = title ? READING_PASSAGE_LINES[title] : undefined
+
+  if (!lines) {
+    return (
+      <div style={{ color: '#1f2937', fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 16 }}>
+        {(text || '').split(/\n\s*\n/).map((paragraph, index) => (
+          <p key={index} style={{ lineHeight: 1.75, margin: index === 0 ? '14px 0 0' : '16px 0 0', textIndent: 28 }}>
+            {paragraph}
+          </p>
+        ))}
+      </div>
+    )
+  }
+
+  const paragraphStarts = new Set(title ? READING_PARAGRAPH_STARTS[title] : [1])
+
+  return (
+    <div style={{ marginTop: 14, color: '#1f2937', fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 16 }}>
+      {lines.map((line, index) => {
+        const lineNumber = index + 1
+        const showNumber = lineNumber === 1 || lineNumber % 5 === 0
+        const startsParagraph = paragraphStarts.has(lineNumber)
+
+        return (
+          <div key={lineNumber} style={{ display: 'grid', gridTemplateColumns: '62px minmax(0, 1fr)', gap: 10, lineHeight: 1.65, marginTop: startsParagraph && lineNumber !== 1 ? 14 : 0 }}>
+            <span style={{ color: '#6b7280', fontSize: 13, fontStyle: 'italic', fontWeight: 700, textAlign: 'right', paddingTop: 2 }}>
+              {showNumber ? `Line ${lineNumber}` : ''}
+            </span>
+            <span style={{ paddingLeft: startsParagraph ? 28 : 0 }}>{line}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // Section pada database boleh berupa "Listening", "Listening Comprehension",
 // "Structure & Written Expression", atau "Reading Comprehension".
 function pilihSoalTes(data: SoalItem[], kataKunci: string, maksimum: number): SoalItem[] {
@@ -136,6 +426,8 @@ function pilihSoalTes(data: SoalItem[], kataKunci: string, maksimum: number): So
 
 export default function HomePage() {
   const [nama, setNama] = useState('')
+  const [npm, setNpm] = useState('')
+  const [prodi, setProdi] = useState('')
   const [email, setEmail] = useState('')
   const [pesertaId, setPesertaId] = useState<number | null>(null)
   const [step, setStep] = useState<Step>('biodata')
@@ -149,7 +441,9 @@ export default function HomePage() {
   const [answersListening, setAnswersListening] = useState<Answers>({})
   const [answersStructure, setAnswersStructure] = useState<Answers>({})
   const [answersReading, setAnswersReading] = useState<Answers>({})
-  const [score, setScore] = useState<ScoreResult | null>(null)
+  const [listeningDirection, setListeningDirection] = useState<ListeningPart | null>(null)
+  const [listeningGroup, setListeningGroup] = useState<ListeningGroup | null>(null)
+  const [directionAudioFinished, setDirectionAudioFinished] = useState(false)
   const submitting = useRef(false)
   const readingBelumTersedia = reading.length === 0
 
@@ -177,16 +471,27 @@ export default function HomePage() {
     }
 
     setLoading(true)
-    const { data, error } = await supabase.from('peserta').insert([{ nama, email }]).select().single()
+    const { data, error } = await supabase
+      .from('peserta')
+      .insert([{ nama, npm, prodi, email }])
+      .select()
+      .single()
     setLoading(false)
     if (error) return alert(`Gagal menyimpan biodata: ${error.message}`)
 
     setPesertaId(data.id)
     setIndex(0)
+    setDirectionAudioFinished(false)
+    setListeningDirection('PART A')
     setStep('listening')
   }
 
-  const nextSectionListening = useCallback(() => { setIndex(0); setStep('structure') }, [])
+  const nextSectionListening = useCallback(() => {
+    setListeningDirection(null)
+    setListeningGroup(null)
+    setIndex(0)
+    setStep('structure')
+  }, [])
   const nextSectionStructure = useCallback(() => { setIndex(0); setStep('reading') }, [])
 
   const hitungSkor = useCallback((): ScoreResult => {
@@ -208,9 +513,12 @@ export default function HomePage() {
     const result = hitungSkor()
     const allQuestions = [...listening, ...structure, ...reading]
     const allAnswers = { ...answersListening, ...answersStructure, ...answersReading }
-    const payload = allQuestions
-      .filter((s) => allAnswers[s.id])
-      .map((s) => ({ peserta_id: pesertaId, section: s.section, nomor_soal: s.nomor_soal, jawaban: allAnswers[s.id] }))
+    const payload = allQuestions.map((s) => ({
+      peserta_id: pesertaId,
+      section: s.section,
+      nomor_soal: s.nomor_soal,
+      jawaban: allAnswers[s.id] || 'X',
+    }))
 
     const { error: answerError } = await supabase.from('jawaban_peserta').insert(payload)
     const { error: participantError } = await supabase
@@ -225,21 +533,48 @@ export default function HomePage() {
       return
     }
 
-    setScore(result)
+    try {
+      const emailResponse = await fetch('/api/send-result', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          participantId: pesertaId,
+          nama,
+          npm,
+          prodi,
+          email,
+          result,
+          questionTotals: {
+            listening: listening.length,
+            structure: structure.length,
+            reading: reading.length,
+          },
+        }),
+      })
+
+      if (!emailResponse.ok) console.error('Email hasil TOEFL gagal dikirim.')
+    } catch {
+      console.error('Email hasil TOEFL gagal dikirim.')
+    }
+
     setLoading(false)
     setStep('selesai')
-  }, [pesertaId, hitungSkor, listening, structure, reading, answersListening, answersStructure, answersReading])
+  }, [pesertaId, nama, npm, prodi, email, hitungSkor, listening, structure, reading, answersListening, answersStructure, answersReading])
 
   if (step === 'biodata') {
     return (
       <main style={centerPage}>
         <div style={card}>
-          <img src="/logo-unpas.png" alt="Logo UNPAS" style={{ display: 'block', width: 120, margin: '0 auto 16px' }} />
+          <div style={logoFrame}>
+            <img src="/logo-unpas.png" alt="Logo UNPAS" style={{ display: 'block', width: 330, height: 330, objectFit: 'contain', flex: '0 0 auto' }} />
+          </div>
           <h2 style={{ color: '#4c1d95', textAlign: 'center' }}>Form Peserta Tes TOEFL</h2>
           {isFetching ? <p style={{ textAlign: 'center' }}>Memuat bank soal...</p> : (
             <form onSubmit={start} style={form}>
-              <input required value={nama} onChange={(e) => setNama(e.target.value)} placeholder="Nama Lengkap" style={input} />
-              <input required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="NPM / Email" style={input} />
+              <label style={fieldLabel}>Nama Lengkap<input required autoComplete="name" value={nama} onChange={(e) => setNama(e.target.value)} placeholder="Masukkan nama lengkap" style={input} /></label>
+              <label style={fieldLabel}>NPM<input required inputMode="numeric" value={npm} onChange={(e) => setNpm(e.target.value)} placeholder="Masukkan NPM" style={input} /></label>
+              <label style={fieldLabel}>Prodi<input required value={prodi} onChange={(e) => setProdi(e.target.value)} placeholder="Masukkan program studi" style={input} /></label>
+              <label style={fieldLabel}>Alamat Email<input required type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nama@email.com" style={input} /></label>
               <button type="submit" disabled={loading} style={purpleButton(loading)}>{loading ? 'Menyimpan...' : 'Mulai Tes TOEFL'}</button>
             </form>
           )}
@@ -251,22 +586,13 @@ export default function HomePage() {
   if (step === 'selesai') {
     return (
       <main style={centerPage}>
-        <div style={card}>
-          <h2 style={{ color: '#4c1d95', textAlign: 'center' }}>Hasil Skor TOEFL ITP</h2>
-          <p style={{ textAlign: 'center' }}>Peserta: <strong>{nama}</strong> ({email})</p>
-          {readingBelumTersedia && (
-            <div style={{ ...box, color: '#92400e', background: '#fffbeb', textAlign: 'center' }}>
-              Mode uji coba selesai. Section Reading belum diunggah, sehingga skor TOEFL belum ditampilkan.
-            </div>
-          )}
-          {score && !readingBelumTersedia && <>
-            <div style={{ ...box, textAlign: 'center' }}><p>Total TOEFL Score</p><strong style={{ fontSize: 48, color: '#581c87' }}>{score.totalScore}</strong><p>CEFR: {score.cefr}</p></div>
-            <table style={{ width: '100%', textAlign: 'center' }}><thead><tr><th>Section</th><th>Benar</th><th>Converted</th></tr></thead><tbody>
-              <tr><td>Listening</td><td>{score.rawL} / {listening.length}</td><td>{score.scaledL}</td></tr>
-              <tr><td>Structure</td><td>{score.rawS} / {structure.length}</td><td>{score.scaledS}</td></tr>
-              <tr><td>Reading</td><td>{score.rawR} / {reading.length}</td><td>{score.scaledR}</td></tr>
-            </tbody></table>
-          </>}
+        <div style={{ ...card, textAlign: 'center' }}>
+          <div style={logoFrame}>
+            <img src="/logo-unpas.png" alt="Logo UNPAS" style={{ display: 'block', width: 330, height: 330, objectFit: 'contain', flex: '0 0 auto' }} />
+          </div>
+          <h2 style={{ color: '#4c1d95', lineHeight: 1.6, margin: 0 }}>
+            Selamat Anda telah melaksanakan TOEFL, semoga hasil yang diraih sesuai dengan harapan
+          </h2>
         </div>
       </main>
     )
@@ -291,7 +617,9 @@ export default function HomePage() {
     : null
   const subtitle = isReading
     ? (question.passage_title || 'Reading Comprehension')
-    : (bagianStructure || question.part || title)
+    : step === 'listening'
+      ? listeningPart(question)
+      : (bagianStructure || question.part || title)
   const options: Array<[string, string]> = [['A', question.pilihan_a], ['B', question.pilihan_b], ['C', question.pilihan_c], ['D', question.pilihan_d]]
 
   const selectAnswer = (answer: string) => {
@@ -301,10 +629,30 @@ export default function HomePage() {
   }
 
   const next = () => {
-    if (!isLast) return setIndex((old) => old + 1)
+    if (step === 'listening' && !answersListening[question.id]) {
+      setAnswersListening((old) => ({ ...old, [question.id]: 'X' }))
+    }
+
+    if (!isLast) {
+      const nextIndex = index + 1
+      if (step === 'listening') {
+        const nextPart = listeningPart(listening[nextIndex])
+        const nextGroup = LISTENING_GROUPS[listening[nextIndex].nomor_soal]
+        setListeningGroup(nextGroup || null)
+        if (nextPart !== listeningPart(question)) {
+          setDirectionAudioFinished(false)
+          setListeningDirection(nextPart)
+        }
+      }
+      return setIndex(nextIndex)
+    }
     if (step === 'listening') return nextSectionListening()
     if (step === 'structure') return readingBelumTersedia ? submit() : nextSectionStructure()
     submit()
+  }
+
+  const audioSelesai = () => {
+    next()
   }
 
   return (
@@ -317,9 +665,71 @@ export default function HomePage() {
         </div>
       </div>
       <div style={topBar}><div><h3 style={{ margin: 0, color: '#4c1d95' }}>{title}</h3><span>{subtitle}</span></div><Timer seconds={duration} onTimeUp={timeUp} /></div>
-      {step === 'listening' && <audio key={question.id} controls autoPlay src={question.audio_url || `/audio/listening/no-${question.nomor_soal}.mp3`} style={{ width: '100%', marginBottom: 20 }} />}
-      <div style={isReading ? readingLayout : undefined}>
-        {isReading && <div style={box}><h4>{question.passage_title}</h4><p style={{ lineHeight: 1.6, textAlign: 'justify' }}>{question.passage_text}</p></div>}
+      {step === 'listening' && listeningDirection ? (
+        <section style={directionCard}>
+          <div style={{ textAlign: 'center' }}>
+            <span style={directionBadge}>{listeningDirection}</span>
+            <h2 style={{ margin: '14px 0 6px', color: '#4c1d95' }}>{LISTENING_DIRECTIONS[listeningDirection].title}</h2>
+            <p style={{ marginTop: 0, color: '#6b7280' }}>Listen to the directions and read along.</p>
+          </div>
+          <audio
+            key={listeningDirection}
+            controls
+            controlsList="nodownload noplaybackrate noremoteplayback"
+            autoPlay
+            onEnded={() => setDirectionAudioFinished(true)}
+            onError={() => setDirectionAudioFinished(true)}
+            onContextMenu={(event) => event.preventDefault()}
+            src={LISTENING_DIRECTIONS[listeningDirection].audio}
+            style={{ width: '100%', margin: '12px 0 20px' }}
+          />
+          <div style={directionText}>{LISTENING_DIRECTIONS[listeningDirection].text}</div>
+          <button
+            type="button"
+            disabled={!directionAudioFinished}
+            onClick={() => setListeningDirection(null)}
+            style={{ ...purpleButton(!directionAudioFinished), width: '100%', marginTop: 24 }}
+          >
+            {directionAudioFinished ? `Mulai ${listeningDirection}` : 'Dengarkan audio sampai selesai...'}
+          </button>
+        </section>
+      ) : step === 'listening' && listeningGroup ? (
+        <section style={directionCard}>
+          <div style={{ textAlign: 'center' }}>
+            <span style={directionBadge}>{listeningPart(question)}</span>
+            <h2 style={{ margin: '14px 0 6px', color: '#4c1d95' }}>{listeningGroup.title}</h2>
+            <p style={{ margin: '0 0 18px', color: '#6b7280' }}>
+              Dengarkan audio berikut sebelum mengerjakan soal {listeningGroup.firstQuestion}–{listeningGroup.lastQuestion}.
+            </p>
+          </div>
+          <audio
+            key={listeningGroup.firstQuestion}
+            controls
+            controlsList="nodownload noplaybackrate noremoteplayback"
+            autoPlay
+            onEnded={() => setListeningGroup(null)}
+            onContextMenu={(event) => event.preventDefault()}
+            src={listeningGroup.audio}
+            style={{ width: '100%', margin: '12px 0' }}
+          />
+          <p style={{ margin: '14px 0 0', textAlign: 'center', color: '#5b21b6', fontWeight: 700 }}>
+            Setelah audio selesai, halaman soal {listeningGroup.firstQuestion} akan terbuka otomatis.
+          </p>
+        </section>
+      ) : step === 'listening' && (
+        <audio
+          key={question.id}
+          controls
+          controlsList="nodownload noplaybackrate noremoteplayback"
+          autoPlay
+          onEnded={audioSelesai}
+          onContextMenu={(event) => event.preventDefault()}
+          src={question.audio_url || `/audio/listening/no-${question.nomor_soal}.mp3`}
+          style={{ width: '100%', marginBottom: 20 }}
+        />
+      )}
+      {!listeningDirection && !listeningGroup && <div style={isReading ? readingLayout : undefined}>
+        {isReading && <div style={box}><h4>{question.passage_title}</h4><ReadingPassage title={question.passage_title} text={question.passage_text} /></div>}
         <div>
           {bagianStructure && (
             <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 8, background: '#ede9fe', color: '#5b21b6', fontWeight: 'bold' }}>
@@ -337,28 +747,43 @@ export default function HomePage() {
           </div>
           <div style={optionList}>{options.map(([key, text]) => <button key={key} type="button" onClick={() => selectAnswer(key)} style={optionButton(answers[question.id] === key)}>({key}) {text}</button>)}</div>
         </div>
-      </div>
-      <div style={navigation}>
+      </div>}
+      {!listeningDirection && !listeningGroup && step === 'listening' && !answers[question.id] && (
+        <p style={{ margin: '0 0 10px', color: '#6b7280', fontSize: 13, textAlign: 'right' }}>
+          Jika tidak menjawab, klik Selanjutnya untuk melewati soal ini.
+        </p>
+      )}
+      {!listeningDirection && !listeningGroup && <div style={navigation}>
         <button type="button" onClick={() => setIndex((old) => Math.max(0, old - 1))} disabled={index === 0} style={grayButton(index === 0)}>Sebelumnya</button>
-        <button type="button" onClick={next} disabled={!answers[question.id] || loading} style={purpleButton(!answers[question.id] || loading)}>
+        <button
+          type="button"
+          onClick={next}
+          disabled={loading || (step !== 'listening' && !answers[question.id])}
+          style={purpleButton(loading || (step !== 'listening' && !answers[question.id]))}
+        >
           {loading ? 'Menyimpan...' : isLast ? (isReading || readingBelumTersedia ? 'Selesaikan Uji Coba' : 'Lanjut Section Berikutnya') : 'Selanjutnya'}
         </button>
-      </div>
+      </div>}
     </main>
   )
 }
 
 const centerPage: CSSProperties = { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: '#f5f3ff', fontFamily: 'system-ui, sans-serif' }
-const testPage: CSSProperties = { margin: '0 auto', padding: 20, fontFamily: 'system-ui, sans-serif' }
+const testPage: CSSProperties = { minHeight: '100vh', margin: '0 auto', padding: 20, background: '#fff', color: '#1f2937', fontFamily: 'system-ui, sans-serif' }
 const card: CSSProperties = { width: '100%', maxWidth: 520, padding: 32, borderRadius: 16, borderTop: '6px solid #7c3aed', background: '#fff', boxShadow: '0 10px 25px -5px rgba(124,58,237,.15)' }
+const logoFrame: CSSProperties = { height: 190, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', margin: '0 auto 8px' }
 const form: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 15 }
-const input: CSSProperties = { padding: 12, border: '1px solid #ddd6fe', borderRadius: 8 }
+const fieldLabel: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 7, color: '#4c1d95', fontSize: 14, fontWeight: 700 }
+const input: CSSProperties = { width: '100%', boxSizing: 'border-box', padding: 12, border: '1px solid #ddd6fe', borderRadius: 8, color: '#111827', fontSize: 15, fontWeight: 400 }
 const testBanner: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, padding: '12px 16px', borderRadius: 12, background: 'linear-gradient(135deg, #4c1d95, #7c3aed)', color: '#fff', boxShadow: '0 8px 18px -10px rgba(76,29,149,.7)' }
 const topBar: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 20, paddingBottom: 10, marginBottom: 20, borderBottom: '2px solid #f3e8ff' }
-const box: CSSProperties = { padding: 15, borderRadius: 8, background: '#faf5ff', marginBottom: 20 }
+const box: CSSProperties = { padding: 15, borderRadius: 8, background: '#faf5ff', color: '#1f2937', marginBottom: 20 }
+const directionCard: CSSProperties = { padding: 24, border: '1px solid #ddd6fe', borderRadius: 14, background: '#faf5ff', boxShadow: '0 8px 20px -14px rgba(76,29,149,.55)' }
+const directionBadge: CSSProperties = { display: 'inline-block', padding: '6px 14px', borderRadius: 999, background: '#7c3aed', color: '#fff', fontWeight: 800, letterSpacing: 1 }
+const directionText: CSSProperties = { maxHeight: 430, overflowY: 'auto', padding: 18, borderRadius: 10, background: '#fff', border: '1px solid #ede9fe', whiteSpace: 'pre-line', lineHeight: 1.75, color: '#1f2937' }
 const readingLayout: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }
 const optionList: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10, margin: '20px 0' }
 const navigation: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 10 }
-const optionButton = (active: boolean): CSSProperties => ({ padding: 12, textAlign: 'left', borderRadius: 8, border: active ? '2px solid #7c3aed' : '1px solid #ddd6fe', background: active ? '#f3e8ff' : '#fff', cursor: 'pointer' })
+const optionButton = (active: boolean): CSSProperties => ({ padding: 12, textAlign: 'left', borderRadius: 8, border: active ? '2px solid #7c3aed' : '1px solid #ddd6fe', background: active ? '#f3e8ff' : '#fff', color: '#111827', cursor: 'pointer' })
 const purpleButton = (disabled: boolean): CSSProperties => ({ padding: '10px 20px', border: 'none', borderRadius: 6, background: '#7c3aed', color: '#fff', fontWeight: 'bold', opacity: disabled ? .5 : 1, cursor: disabled ? 'not-allowed' : 'pointer' })
 const grayButton = (disabled: boolean): CSSProperties => ({ padding: '10px 20px', border: 'none', borderRadius: 6, background: '#e5e7eb', color: '#111827', fontWeight: 'bold', opacity: disabled ? .5 : 1, cursor: disabled ? 'not-allowed' : 'pointer' })

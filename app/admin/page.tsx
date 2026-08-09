@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { logoutAdmin, toggleAccessCode } from './actions'
+import AutoRefresh from './auto-refresh'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,6 +18,11 @@ type Participant = {
   pelanggaran_count: number
   created_at: string
   submitted_at: string | null
+  test_started_at: string
+  last_activity_at: string
+  current_section: string
+  current_question: number
+  section_deadline: string
 }
 
 type AccessCode = {
@@ -39,10 +45,22 @@ function formatDate(value: string | null) {
   }).format(new Date(value))
 }
 
-function statusLabel(status: string) {
-  if (status === 'selesai') return 'Selesai'
-  if (status === 'dihentikan_pelanggaran') return 'Dihentikan'
-  return 'Sedang / belum selesai'
+function monitoringStatus(participant: Participant, now: number) {
+  if (participant.submitted_at || participant.skor_akhir !== null) {
+    if (participant.status_tes === 'dihentikan_pelanggaran') return { key: 'stopped', label: 'Dihentikan', className: 'bg-red-100 text-red-800' }
+    return { key: 'completed', label: 'Selesai', className: 'bg-emerald-100 text-emerald-800' }
+  }
+  if (new Date(participant.section_deadline).getTime() < now) return { key: 'expired', label: 'Waktu habis', className: 'bg-orange-100 text-orange-800' }
+  if (now - new Date(participant.last_activity_at).getTime() <= 75_000) return { key: 'active', label: 'Aktif', className: 'bg-blue-100 text-blue-800' }
+  return { key: 'disconnected', label: 'Terputus', className: 'bg-amber-100 text-amber-800' }
+}
+
+function sectionLabel(section: string) {
+  if (section === 'selesai') return 'Selesai'
+  if (section === 'listening') return 'Listening'
+  if (section === 'structure') return 'Structure'
+  if (section === 'reading') return 'Reading'
+  return 'Belum mulai'
 }
 
 export default async function AdminPage() {
@@ -51,10 +69,10 @@ export default async function AdminPage() {
   const claims = claimsData?.claims as { email?: string; app_metadata?: { role?: string } } | undefined
   if (claims?.app_metadata?.role !== 'admin') redirect('/admin/login')
 
-  const [participantsResult, accessCodesResult, questionsResult] = await Promise.all([
+  const [participantsResult, accessCodesResult, questionsResult, timeResult] = await Promise.all([
     supabase
       .from('peserta')
-      .select('id,nama,npm,prodi,email,skor_akhir,cefr_level,status_tes,pelanggaran_count,created_at,submitted_at')
+      .select('id,nama,npm,prodi,email,skor_akhir,cefr_level,status_tes,pelanggaran_count,created_at,submitted_at,test_started_at,last_activity_at,current_section,current_question,section_deadline')
       .order('created_at', { ascending: false })
       .limit(250),
     supabase
@@ -63,13 +81,18 @@ export default async function AdminPage() {
       .order('id', { ascending: true })
       .limit(500),
     supabase.from('soal').select('section'),
+    supabase.rpc('get_monitoring_time'),
   ])
 
-  const errors = [participantsResult.error, accessCodesResult.error, questionsResult.error].filter(Boolean)
+  const errors = [participantsResult.error, accessCodesResult.error, questionsResult.error, timeResult.error].filter(Boolean)
   const participants = (participantsResult.data || []) as Participant[]
   const accessCodes = (accessCodesResult.data || []) as AccessCode[]
   const questions = (questionsResult.data || []) as QuestionSection[]
-  const completed = participants.filter((participant) => participant.status_tes === 'selesai').length
+  const now = Date.parse(String(timeResult.data || '1970-01-01T00:00:00Z'))
+  const statuses = new Map(participants.map((participant) => [participant.id, monitoringStatus(participant, now)]))
+  const completed = participants.filter((participant) => statuses.get(participant.id)?.key === 'completed').length
+  const active = participants.filter((participant) => statuses.get(participant.id)?.key === 'active').length
+  const interrupted = participants.filter((participant) => ['disconnected', 'expired'].includes(statuses.get(participant.id)?.key || '')).length
   const violations = participants.filter((participant) => participant.pelanggaran_count > 0).length
   const activeCodes = accessCodes.filter((code) => code.is_active).length
   const sectionCounts = questions.reduce<Record<string, number>>((result, question) => {
@@ -102,9 +125,11 @@ export default async function AdminPage() {
           <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-800">Sebagian data belum dapat dimuat: {errors.map((error) => error?.message).join('; ')}</div>
         )}
 
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           {[
             ['Total peserta', participants.length],
+            ['Sedang aktif', active],
+            ['Terputus / waktu habis', interrupted],
             ['Tes selesai', completed],
             ['Peserta melanggar', violations],
             ['Kode aktif', activeCodes],
@@ -118,20 +143,25 @@ export default async function AdminPage() {
 
         <section className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-violet-100">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div><h2 className="text-xl font-bold text-violet-950">Peserta dan hasil tes</h2><p className="text-sm text-slate-500">Menampilkan maksimal 250 peserta terbaru.</p></div>
+            <div><h2 className="text-xl font-bold text-violet-950">Pemantauan peserta</h2><p className="text-sm text-slate-500">Status diperbarui otomatis setiap 30 detik. Menampilkan maksimal 250 peserta terbaru.</p></div>
+            <AutoRefresh />
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1050px] border-collapse text-sm">
-              <thead><tr className="bg-violet-100 text-left text-violet-950">{['Nama','NPM','Prodi','Email','Skor','CEFR','Status','Pelanggaran','Mulai','Selesai'].map((label) => <th key={label} className="px-3 py-3">{label}</th>)}</tr></thead>
+            <table className="w-full min-w-[1280px] border-collapse text-sm">
+              <thead><tr className="bg-violet-100 text-left text-violet-950">{['Nama','NPM','Prodi','Email','Posisi','Status','Aktivitas terakhir','Skor','CEFR','Pelanggaran','Mulai','Selesai'].map((label) => <th key={label} className="px-3 py-3">{label}</th>)}</tr></thead>
               <tbody>
-                {participants.map((participant) => (
-                  <tr key={participant.id} className="border-b border-slate-100 align-top">
+                {participants.map((participant) => {
+                  const status = statuses.get(participant.id)!
+                  return <tr key={participant.id} className="border-b border-slate-100 align-top">
                     <td className="px-3 py-3 font-semibold">{participant.nama}</td><td className="px-3 py-3">{participant.npm || '—'}</td><td className="px-3 py-3">{participant.prodi || '—'}</td><td className="px-3 py-3">{participant.email}</td>
-                    <td className="px-3 py-3 font-bold text-violet-900">{participant.skor_akhir ?? '—'}</td><td className="px-3 py-3">{participant.cefr_level || '—'}</td><td className="px-3 py-3">{statusLabel(participant.status_tes)}</td>
-                    <td className={`px-3 py-3 font-semibold ${participant.pelanggaran_count ? 'text-red-700' : 'text-emerald-700'}`}>{participant.pelanggaran_count}</td><td className="px-3 py-3">{formatDate(participant.created_at)}</td><td className="px-3 py-3">{formatDate(participant.submitted_at)}</td>
+                    <td className="px-3 py-3"><strong>{sectionLabel(participant.current_section)}</strong><br /><span className="text-xs text-slate-500">Soal {participant.current_question}</span></td>
+                    <td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-xs font-bold ${status.className}`}>{status.label}</span></td>
+                    <td className="px-3 py-3">{formatDate(participant.last_activity_at)}</td>
+                    <td className="px-3 py-3 font-bold text-violet-900">{participant.skor_akhir ?? '—'}</td><td className="px-3 py-3">{participant.cefr_level || '—'}</td>
+                    <td className={`px-3 py-3 font-semibold ${participant.pelanggaran_count ? 'text-red-700' : 'text-emerald-700'}`}>{participant.pelanggaran_count}</td><td className="px-3 py-3">{formatDate(participant.test_started_at || participant.created_at)}</td><td className="px-3 py-3">{formatDate(participant.submitted_at)}</td>
                   </tr>
-                ))}
-                {!participants.length && <tr><td colSpan={10} className="px-3 py-8 text-center text-slate-500">Belum ada data peserta.</td></tr>}
+                })}
+                {!participants.length && <tr><td colSpan={12} className="px-3 py-8 text-center text-slate-500">Belum ada data peserta.</td></tr>}
               </tbody>
             </table>
           </div>

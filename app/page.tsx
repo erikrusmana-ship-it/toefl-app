@@ -15,6 +15,34 @@ type ListeningPart = 'PART A' | 'PART B' | 'PART C'
 type ListeningGroup = { title: string; audio: string; firstQuestion: number; lastQuestion: number }
 type ViolationType = 'TAB_HIDDEN' | 'WINDOW_BLUR' | 'FULLSCREEN_EXIT'
 type AntiCheatViolation = { type: ViolationType; label: string; occurredAt: string; section: Exclude<Step, 'access' | 'biodata' | 'selesai'> }
+type ActiveStep = Exclude<Step, 'access' | 'biodata' | 'selesai'>
+type SaveState = 'idle' | 'saving' | 'saved' | 'pending'
+type ProgressData = {
+  version: 1
+  answersListening: Answers
+  answersStructure: Answers
+  answersReading: Answers
+  violationCount: number
+  violations: AntiCheatViolation[]
+}
+
+function normalizeAnswers(value: unknown): Answers {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const result: Answers = {}
+  for (const [questionId, answer] of Object.entries(value)) {
+    const id = Number(questionId)
+    if (Number.isInteger(id) && id > 0 && typeof answer === 'string' && ['A', 'B', 'C', 'D', 'X'].includes(answer)) result[id] = answer
+  }
+  return result
+}
+
+function friendlyError(error: unknown, fallback: string) {
+  const message = error instanceof Error ? error.message : typeof error === 'object' && error && 'message' in error ? String(error.message) : ''
+  if (/fetch|network|offline/i.test(message)) return 'Koneksi internet terputus. Periksa jaringan lalu coba lagi.'
+  if (/rate limit|too many/i.test(message)) return 'Terlalu banyak permintaan. Tunggu beberapa menit lalu coba lagi.'
+  if (/sesi peserta/i.test(message)) return 'Sesi tes tidak lagi valid. Hubungi administrator untuk bantuan.'
+  return fallback
+}
 
 const VIOLATION_LABELS: Record<ViolationType, string> = {
   TAB_HIDDEN: 'Membuka tab lain atau meminimalkan browser',
@@ -297,30 +325,34 @@ interface SoalItem {
   pilihan_d: string
 }
 
-function Timer({ seconds, onTimeUp }: { seconds: number; onTimeUp: () => void }) {
-  const [left, setLeft] = useState(seconds)
+function Timer({ deadline, onTimeUp }: { deadline: string; onTimeUp: () => void }) {
+  const [left, setLeft] = useState<number | null>(null)
   const callbackRef = useRef(onTimeUp)
+  const firedRef = useRef(false)
 
   useEffect(() => { callbackRef.current = onTimeUp }, [onTimeUp])
 
   useEffect(() => {
-    if (left <= 0) return
-    const id = window.setInterval(() => {
-      setLeft((previous) => {
-        if (previous <= 1) {
-          window.clearInterval(id)
-          callbackRef.current()
-          return 0
-        }
-        return previous - 1
-      })
-    }, 1000)
-    return () => window.clearInterval(id)
-  }, [left])
+    firedRef.current = false
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((new Date(deadline).getTime() - Date.now()) / 1000))
+      setLeft(remaining)
+      if (remaining <= 0 && !firedRef.current) {
+        firedRef.current = true
+        callbackRef.current()
+      }
+    }
+    const firstTick = window.setTimeout(tick, 0)
+    const interval = window.setInterval(tick, 1000)
+    return () => {
+      window.clearTimeout(firstTick)
+      window.clearInterval(interval)
+    }
+  }, [deadline])
 
   return (
     <strong style={{ color: '#7c3aed', fontSize: 18 }}>
-      {Math.floor(left / 60).toString().padStart(2, '0')}:{(left % 60).toString().padStart(2, '0')}
+      {left === null ? '--:--' : `${Math.floor(left / 60).toString().padStart(2, '0')}:${(left % 60).toString().padStart(2, '0')}`}
     </strong>
   )
 }
@@ -427,6 +459,21 @@ function pilihSoalTes(data: SoalItem[], kataKunci: string, maksimum: number): So
   return Array.from(unik.values()).slice(0, maksimum)
 }
 
+async function fetchQuestionBank() {
+  const { data, error } = await supabase
+    .from('soal')
+    .select('id,section,nomor_soal,part,audio_url,passage_title,passage_text,pertanyaan,pilihan_a,pilihan_b,pilihan_c,pilihan_d')
+    .order('id', { ascending: true })
+
+  if (error) throw error
+  const all = (data || []) as SoalItem[]
+  return {
+    listening: pilihSoalTes(all, 'listen', 50),
+    structure: pilihSoalTes(all, 'struct', 40),
+    reading: pilihSoalTes(all, 'read', 50),
+  }
+}
+
 export default function HomePage() {
   const [accessCode, setAccessCode] = useState('')
   const [nama, setNama] = useState('')
@@ -434,11 +481,15 @@ export default function HomePage() {
   const [prodi, setProdi] = useState('')
   const [email, setEmail] = useState('')
   const [pesertaId, setPesertaId] = useState<number | null>(null)
-  const [submissionToken, setSubmissionToken] = useState('')
   const [step, setStep] = useState<Step>('access')
   const [index, setIndex] = useState(0)
   const [loading, setLoading] = useState(false)
   const [isFetching, setIsFetching] = useState(true)
+  const [resumeAvailable, setResumeAvailable] = useState(false)
+  const [checkingResume, setCheckingResume] = useState(true)
+  const [sectionDeadline, setSectionDeadline] = useState(() => new Date(Date.now() + 40 * 60 * 1000).toISOString())
+  const [saveState, setSaveState] = useState<SaveState>('idle')
+  const [pageMessage, setPageMessage] = useState('')
 
   const [listening, setListening] = useState<SoalItem[]>([])
   const [structure, setStructure] = useState<SoalItem[]>([])
@@ -457,7 +508,22 @@ export default function HomePage() {
   const lastViolationAtRef = useRef(0)
   const forcedTerminationRef = useRef(false)
   const submitRef = useRef<() => void>(() => undefined)
+  const saveSequenceRef = useRef(0)
   const readingBelumTersedia = reading.length === 0
+
+  useEffect(() => {
+    let active = true
+    fetch('/api/test-session', { cache: 'no-store' })
+      .then((response) => response.json())
+      .then((data) => {
+        if (active) setResumeAvailable(Boolean(data?.hasSession && !data?.progress?.submitted))
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) setCheckingResume(false)
+      })
+    return () => { active = false }
+  }, [])
 
   const verifyAccessCode = async (event: FormEvent) => {
     event.preventDefault()
@@ -485,25 +551,94 @@ export default function HomePage() {
     if (step !== 'biodata') return
 
     const load = async () => {
-      const { data, error } = await supabase
-        .from('soal')
-        .select('id,section,nomor_soal,part,audio_url,passage_title,passage_text,pertanyaan,pilihan_a,pilihan_b,pilihan_c,pilihan_d')
-        .order('id', { ascending: true })
-      if (error) {
-        alert(`Gagal mengambil bank soal: ${error.message}`)
-      } else {
-        const all = (data || []) as SoalItem[]
-        setListening(pilihSoalTes(all, 'listen', 50))
-        setStructure(pilihSoalTes(all, 'struct', 40))
-        setReading(pilihSoalTes(all, 'read', 50))
+      try {
+        const bank = await fetchQuestionBank()
+        setListening(bank.listening)
+        setStructure(bank.structure)
+        setReading(bank.reading)
+      } catch (error) {
+        setPageMessage(friendlyError(error, 'Bank soal belum dapat dimuat. Muat ulang halaman atau hubungi administrator.'))
       }
       setIsFetching(false)
     }
-    load()
+    void load()
   }, [step])
+
+  const resumePreviousTest = async () => {
+    setLoading(true)
+    setPageMessage('')
+    try {
+      if (!isGoogleChrome()) throw new Error('Chrome required')
+      if (!document.fullscreenEnabled) throw new Error('Fullscreen unavailable')
+
+      const [sessionResponse, bank] = await Promise.all([
+        fetch('/api/test-session', { cache: 'no-store' }),
+        fetchQuestionBank(),
+      ])
+      const sessionData = await sessionResponse.json()
+      if (!sessionResponse.ok || !sessionData?.hasSession || sessionData?.progress?.submitted) {
+        setResumeAvailable(false)
+        throw new Error('Sesi peserta tidak valid.')
+      }
+
+      await document.documentElement.requestFullscreen({ navigationUI: 'hide' })
+
+      const serverProgress = sessionData.progress as {
+        section?: ActiveStep
+        question?: number
+        section_deadline?: string
+        progress?: Partial<ProgressData>
+      }
+      const activeStep: ActiveStep = ['listening', 'structure', 'reading'].includes(String(serverProgress.section))
+        ? serverProgress.section as ActiveStep
+        : 'listening'
+      const maxQuestions = activeStep === 'listening' ? bank.listening.length : activeStep === 'structure' ? bank.structure.length : bank.reading.length
+      const restoredIndex = Math.max(0, Math.min((Number(serverProgress.question) || 1) - 1, Math.max(0, maxQuestions - 1)))
+      const storedProgress = serverProgress.progress || {}
+      const storedViolations = Array.isArray(storedProgress.violations)
+        ? storedProgress.violations.filter((item): item is AntiCheatViolation => Boolean(item && typeof item === 'object' && 'type' in item && 'occurredAt' in item)).slice(0, 10)
+        : []
+
+      setListening(bank.listening)
+      setStructure(bank.structure)
+      setReading(bank.reading)
+      setAnswersListening(normalizeAnswers(storedProgress.answersListening))
+      setAnswersStructure(normalizeAnswers(storedProgress.answersStructure))
+      setAnswersReading(normalizeAnswers(storedProgress.answersReading))
+      setPesertaId(Number(sessionData.participantId))
+      setIndex(restoredIndex)
+      setListeningDirection(null)
+      setListeningGroup(null)
+      setSectionDeadline(serverProgress.section_deadline || new Date(Date.now() + 40 * 60 * 1000).toISOString())
+      violationsRef.current = storedViolations
+      setViolationCount(storedViolations.length)
+      forcedTerminationRef.current = false
+      lastViolationAtRef.current = Date.now()
+      antiCheatActiveRef.current = true
+      setResumeAvailable(false)
+      setStep(activeStep)
+    } catch (error) {
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
+      const message = error instanceof Error && error.message === 'Chrome required'
+        ? 'Tes hanya dapat dilanjutkan menggunakan Google Chrome.'
+        : error instanceof Error && error.message === 'Fullscreen unavailable'
+          ? 'Perangkat atau browser ini tidak mendukung mode fullscreen.'
+          : friendlyError(error, 'Tes sebelumnya belum dapat dilanjutkan. Periksa koneksi lalu coba lagi.')
+      setPageMessage(message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const discardPreviousSession = async () => {
+    await fetch('/api/test-session', { method: 'DELETE' }).catch(() => undefined)
+    setResumeAvailable(false)
+    setPageMessage('Sesi pada perangkat ini telah dihapus. Anda dapat memulai tes baru.')
+  }
 
   const start = async (event: FormEvent) => {
     event.preventDefault()
+    setPageMessage('')
     if (!listening.length || !structure.length) {
       alert('Soal Listening atau Structure belum tersedia. Cek kolom section pada tabel soal.')
       return
@@ -540,25 +675,39 @@ export default function HomePage() {
       p_prodi: prodi.trim(),
       p_email: email.trim().toLowerCase(),
     })
-    setLoading(false)
     if (error) {
+      setLoading(false)
       if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
       if (error.message.toLowerCase().includes('kode akses')) setStep('access')
       return alert(`Gagal memulai tes: ${error.message}`)
     }
 
-    const participant = data as { participant_id?: number; submission_token?: string } | null
+    const participant = data as { participant_id?: number; submission_token?: string; section_deadline?: string } | null
     if (!participant?.participant_id || !participant.submission_token) {
+      setLoading(false)
       if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
       return alert('Gagal memulai tes: sesi peserta tidak berhasil dibuat.')
     }
 
+    const sessionResponse = await fetch('/api/test-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ participantId: Number(participant.participant_id), submissionToken: participant.submission_token }),
+    })
+    if (!sessionResponse.ok) {
+      setLoading(false)
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
+      setPageMessage('Sesi aman tidak berhasil dibuat. Periksa koneksi lalu mulai kembali.')
+      return
+    }
+
     setPesertaId(Number(participant.participant_id))
-    setSubmissionToken(participant.submission_token)
+    setSectionDeadline(participant.section_deadline || new Date(Date.now() + 40 * 60 * 1000).toISOString())
     setIndex(0)
     setDirectionAudioFinished(false)
     setListeningDirection('PART A')
     antiCheatActiveRef.current = true
+    setLoading(false)
     setStep('listening')
   }
 
@@ -566,13 +715,19 @@ export default function HomePage() {
     setListeningDirection(null)
     setListeningGroup(null)
     setIndex(0)
+    setSectionDeadline(new Date(Date.now() + 25 * 60 * 1000).toISOString())
     setStep('structure')
   }, [])
-  const nextSectionStructure = useCallback(() => { setIndex(0); setStep('reading') }, [])
+  const nextSectionStructure = useCallback(() => {
+    setIndex(0)
+    setSectionDeadline(new Date(Date.now() + 55 * 60 * 1000).toISOString())
+    setStep('reading')
+  }, [])
 
   const submit = useCallback(async () => {
-    if (!pesertaId || !submissionToken || submitting.current) return
+    if (!pesertaId || submitting.current) return
     submitting.current = true
+    setPageMessage('')
     antiCheatActiveRef.current = false
     setLoading(true)
     const violations = [...violationsRef.current]
@@ -584,16 +739,15 @@ export default function HomePage() {
       answer: allAnswers[question.id] || 'X',
     }))
 
-    const { data: scoreData, error: scoreError } = await supabase.rpc('submit_test_attempt', {
-      p_participant_id: pesertaId,
-      p_submission_token: submissionToken,
-      p_answers: answersPayload,
-      p_violations: violations,
-      p_status: statusTes,
+    const scoreResponse = await fetch('/api/test-submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers: answersPayload, violations, status: statusTes }),
     })
+    const scoreData = await scoreResponse.json().catch(() => null)
 
-    if (scoreError || !scoreData) {
-      alert(`Gagal menyimpan hasil: ${scoreError?.message || 'hasil tidak diterima server'}`)
+    if (!scoreResponse.ok || !scoreData?.success) {
+      setPageMessage(scoreData?.error || 'Hasil belum tersimpan. Periksa koneksi lalu klik Selesaikan kembali.')
       submitting.current = false
       antiCheatActiveRef.current = true
       setLoading(false)
@@ -604,10 +758,7 @@ export default function HomePage() {
       const emailResponse = await fetch('/api/send-result', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          participantId: pesertaId,
-          submissionToken,
-        }),
+        body: JSON.stringify({}),
       })
 
       if (!emailResponse.ok) console.error('Email hasil TOEFL gagal dikirim.')
@@ -616,13 +767,59 @@ export default function HomePage() {
     }
 
     setLoading(false)
+    await fetch('/api/test-session', { method: 'DELETE' }).catch(() => undefined)
     if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
     setStep('selesai')
-  }, [pesertaId, submissionToken, listening, structure, reading, answersListening, answersStructure, answersReading])
+  }, [pesertaId, listening, structure, reading, answersListening, answersStructure, answersReading])
 
   useEffect(() => {
     submitRef.current = () => { void submit() }
   }, [submit])
+
+  const persistProgress = useCallback(async () => {
+    if (!pesertaId || submitting.current || !['listening', 'structure', 'reading'].includes(step)) return
+    const sequence = ++saveSequenceRef.current
+    setSaveState('saving')
+
+    const progress: ProgressData = {
+      version: 1,
+      answersListening,
+      answersStructure,
+      answersReading,
+      violationCount,
+      violations: violationsRef.current.slice(0, 10),
+    }
+
+    try {
+      const response = await fetch('/api/test-session', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ section: step, question: index + 1, progress }),
+      })
+      const result = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(result?.error || 'Autosave failed')
+      if (sequence !== saveSequenceRef.current) return
+      if (typeof result?.section_deadline === 'string') setSectionDeadline(result.section_deadline)
+      setSaveState('saved')
+      setPageMessage('')
+    } catch (error) {
+      if (sequence !== saveSequenceRef.current) return
+      console.error('Autosave tertunda:', error)
+      setSaveState('pending')
+    }
+  }, [pesertaId, step, index, answersListening, answersStructure, answersReading, violationCount])
+
+  useEffect(() => {
+    if (!pesertaId || !['listening', 'structure', 'reading'].includes(step)) return
+    const timeout = window.setTimeout(() => { void persistProgress() }, 900)
+    return () => window.clearTimeout(timeout)
+  }, [pesertaId, persistProgress, step])
+
+  useEffect(() => {
+    if (!pesertaId || !['listening', 'structure', 'reading'].includes(step)) return
+    const interval = window.setInterval(() => { void persistProgress() }, 30000)
+    return () => window.clearInterval(interval)
+  }, [pesertaId, persistProgress, step])
 
   const recordViolation = useCallback((type: ViolationType) => {
     if (!antiCheatActiveRef.current || submitting.current) return
@@ -733,6 +930,23 @@ export default function HomePage() {
             </ul>
           </div>
 
+          {resumeAvailable && (
+            <div style={resumeCard}>
+              <div>
+                <strong style={{ display: 'block', color: '#166534' }}>Tes sebelumnya ditemukan</strong>
+                <span style={{ color: '#4b5563', fontSize: 14 }}>Jawaban dan sisa waktu tersimpan. Lanjutkan dari posisi terakhir pada perangkat ini.</span>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button type="button" disabled={loading} onClick={() => { void resumePreviousTest() }} style={purpleButton(loading)}>
+                  {loading ? 'Membuka sesi...' : 'Lanjutkan Tes'}
+                </button>
+                <button type="button" disabled={loading} onClick={() => { void discardPreviousSession() }} style={grayButton(loading)}>Hapus sesi</button>
+              </div>
+            </div>
+          )}
+          {checkingResume && <p style={{ color: '#6b7280', fontSize: 13 }}>Memeriksa tes yang belum selesai...</p>}
+          {pageMessage && <p role="alert" style={errorNotice}>{pageMessage}</p>}
+
           <div style={accessCard}>
             <span style={accessTab}>Masukkan Kode</span>
             <h2 style={{ margin: '18px 0 6px', color: '#4c1d95' }}>Kode Akses Tes</h2>
@@ -770,6 +984,7 @@ export default function HomePage() {
           </div>
           <h2 style={{ color: '#4c1d95', textAlign: 'center' }}>Form Peserta Tes TOEFL</h2>
           <p style={{ marginTop: -4, textAlign: 'center', color: '#166534', fontWeight: 700 }}>Kode akses diterima</p>
+          {pageMessage && <p role="alert" style={errorNotice}>{pageMessage}</p>}
           {isFetching ? <p style={{ textAlign: 'center' }}>Memuat bank soal...</p> : (
             <form onSubmit={start} style={form}>
               <label style={fieldLabel}>Nama Lengkap<input required autoComplete="name" value={nama} onChange={(e) => setNama(e.target.value)} placeholder="Masukkan nama lengkap" style={input} /></label>
@@ -812,7 +1027,6 @@ export default function HomePage() {
   const isReading = step === 'reading'
   const isWrittenExpression = step === 'structure' && question.nomor_soal >= 16
   const isLast = index === questions.length - 1
-  const duration = step === 'listening' ? 40 * 60 : step === 'structure' ? 25 * 60 : 55 * 60
   const timeUp = step === 'listening' ? nextSectionListening : step === 'structure' ? (readingBelumTersedia ? submit : nextSectionStructure) : submit
   const title = step === 'listening' ? 'Section 1: Listening' : step === 'structure' ? 'Section 2: Structure' : 'Section 3: Reading'
   const bagianStructure = step === 'structure'
@@ -883,7 +1097,16 @@ export default function HomePage() {
         </div>
         <span style={antiCheatBadge}>Anti-cheating aktif · {violationCount}/2</span>
       </div>
-      <div style={topBar}><div><h3 style={{ margin: 0, color: '#4c1d95' }}>{title}</h3><span>{subtitle}</span></div><Timer key={step} seconds={duration} onTimeUp={timeUp} /></div>
+      {pageMessage && <p role="alert" style={errorNotice}>{pageMessage}</p>}
+      <div style={topBar}>
+        <div><h3 style={{ margin: 0, color: '#4c1d95' }}>{title}</h3><span>{subtitle}</span></div>
+        <div style={{ textAlign: 'right' }}>
+          <Timer key={step} deadline={sectionDeadline} onTimeUp={timeUp} />
+          <small style={{ display: 'block', marginTop: 4, color: saveState === 'pending' ? '#b45309' : '#6b7280' }}>
+            {saveState === 'saving' ? 'Menyimpan...' : saveState === 'pending' ? 'Autosave tertunda — mencoba lagi' : saveState === 'saved' ? 'Jawaban tersimpan' : 'Autosave aktif'}
+          </small>
+        </div>
+      </div>
       {step === 'listening' && listeningDirection ? (
         <section style={directionCard}>
           <div style={{ textAlign: 'center' }}>
@@ -996,6 +1219,8 @@ const landingSubtitle: CSSProperties = { margin: 0, color: '#6d28d9', fontSize: 
 const testSummaryGrid: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12, margin: '28px 0 16px' }
 const summaryItem: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, padding: 16, border: '1px solid #ddd6fe', borderRadius: 12, background: '#fff', boxShadow: '0 6px 20px -16px rgba(76,29,149,.6)' }
 const rulesPanel: CSSProperties = { maxWidth: 660, margin: '0 auto 24px', padding: 18, borderRadius: 12, background: '#fffbeb', border: '1px solid #fbbf24', color: '#78350f', textAlign: 'left' }
+const resumeCard: CSSProperties = { maxWidth: 660, margin: '0 auto 20px', padding: 18, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', borderRadius: 12, background: '#ecfdf5', border: '1px solid #6ee7b7', textAlign: 'left' }
+const errorNotice: CSSProperties = { margin: '12px auto', padding: 12, maxWidth: 660, borderRadius: 9, border: '1px solid #fca5a5', background: '#fef2f2', color: '#991b1b', fontWeight: 600, lineHeight: 1.5 }
 const accessCard: CSSProperties = { maxWidth: 520, margin: '0 auto', padding: 28, borderRadius: 16, borderTop: '6px solid #7c3aed', background: '#fff', boxShadow: '0 18px 40px -20px rgba(76,29,149,.45)', textAlign: 'left' }
 const accessTab: CSSProperties = { display: 'inline-block', padding: '7px 14px', borderRadius: 999, background: '#ede9fe', color: '#5b21b6', fontSize: 13, fontWeight: 800 }
 const testPage: CSSProperties = { minHeight: '100vh', margin: '0 auto', padding: 20, background: '#fff', color: '#1f2937', fontFamily: 'system-ui, sans-serif' }

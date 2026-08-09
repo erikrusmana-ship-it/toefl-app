@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { readTestSession } from '@/lib/test-session-cookie'
 
 const RESULT_RECIPIENT = 'erik.rusmana@unpas.ac.id'
 
@@ -80,18 +81,22 @@ export async function POST(request: Request) {
   const apiKey = process.env.RESEND_API_KEY
   if (!apiKey) return NextResponse.json({ error: 'Email service is not configured.' }, { status: 503 })
 
-  let requestPayload: Partial<EmailRequest>
+  let requestPayload: Partial<EmailRequest> = {}
   try {
     requestPayload = await request.json()
   } catch {
-    return NextResponse.json({ error: 'Invalid request.' }, { status: 400 })
+    // Body boleh kosong karena sesi aman dapat dibaca dari cookie HttpOnly.
   }
 
-  if (!Number.isInteger(requestPayload.participantId)
-    || Number(requestPayload.participantId) < 1
-    || typeof requestPayload.submissionToken !== 'string'
-    || requestPayload.submissionToken.length < 32
-    || requestPayload.submissionToken.length > 256
+  const cookieSession = await readTestSession()
+  const sessionParticipantId = cookieSession?.participantId ?? requestPayload.participantId
+  const sessionSubmissionToken = cookieSession?.submissionToken ?? requestPayload.submissionToken
+
+  if (!Number.isInteger(sessionParticipantId)
+    || Number(sessionParticipantId) < 1
+    || typeof sessionSubmissionToken !== 'string'
+    || sessionSubmissionToken.length < 32
+    || sessionSubmissionToken.length > 256
   ) {
     return NextResponse.json({ error: 'Invalid result data.' }, { status: 400 })
   }
@@ -102,8 +107,8 @@ export async function POST(request: Request) {
     { auth: { persistSession: false, autoRefreshToken: false } }
   )
   const { data, error } = await supabase.rpc('get_result_for_email', {
-    p_participant_id: requestPayload.participantId,
-    p_submission_token: requestPayload.submissionToken,
+    p_participant_id: sessionParticipantId,
+    p_submission_token: sessionSubmissionToken,
   })
 
   const payload = data as Partial<ResultPayload> | null

@@ -9,10 +9,6 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const CONVERSION_LISTENING = [31, 31, 31, 31, 31, 31, 31, 31, 32, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 51, 52, 52, 53, 54, 54, 55, 56, 57, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 68]
-const CONVERSION_STRUCTURE = [31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 33, 35, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 60, 61, 63, 65, 66, 67, 68, 68]
-const CONVERSION_READING = [31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 67, 67]
-
 type Step = 'access' | 'biodata' | 'listening' | 'structure' | 'reading' | 'selesai'
 type Answers = Record<number, string>
 type ListeningPart = 'PART A' | 'PART B' | 'PART C'
@@ -299,14 +295,6 @@ interface SoalItem {
   pilihan_b: string
   pilihan_c: string
   pilihan_d: string
-  kunci_jawaban: string
-}
-
-interface ScoreResult {
-  rawL: number; scaledL: number
-  rawS: number; scaledS: number
-  rawR: number; scaledR: number
-  totalScore: number; cefr: string
 }
 
 function Timer({ seconds, onTimeUp }: { seconds: number; onTimeUp: () => void }) {
@@ -314,7 +302,6 @@ function Timer({ seconds, onTimeUp }: { seconds: number; onTimeUp: () => void })
   const callbackRef = useRef(onTimeUp)
 
   useEffect(() => { callbackRef.current = onTimeUp }, [onTimeUp])
-  useEffect(() => { setLeft(seconds) }, [seconds])
 
   useEffect(() => {
     if (left <= 0) return
@@ -432,7 +419,6 @@ function pilihSoalTes(data: SoalItem[], kataKunci: string, maksimum: number): So
       soal.pilihan_b,
       soal.pilihan_c,
       soal.pilihan_d,
-      soal.kunci_jawaban,
     ].map((nilai) => nilai || '').join('|')
 
     if (!unik.has(identitasSoal)) unik.set(identitasSoal, soal)
@@ -448,6 +434,7 @@ export default function HomePage() {
   const [prodi, setProdi] = useState('')
   const [email, setEmail] = useState('')
   const [pesertaId, setPesertaId] = useState<number | null>(null)
+  const [submissionToken, setSubmissionToken] = useState('')
   const [step, setStep] = useState<Step>('access')
   const [index, setIndex] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -498,7 +485,10 @@ export default function HomePage() {
     if (step !== 'biodata') return
 
     const load = async () => {
-      const { data, error } = await supabase.from('soal').select('*').order('id', { ascending: true })
+      const { data, error } = await supabase
+        .from('soal')
+        .select('id,section,nomor_soal,part,audio_url,passage_title,passage_text,pertanyaan,pilihan_a,pilihan_b,pilihan_c,pilihan_d')
+        .order('id', { ascending: true })
       if (error) {
         alert(`Gagal mengambil bank soal: ${error.message}`)
       } else {
@@ -543,7 +533,7 @@ export default function HomePage() {
     setAntiCheatWarning(null)
 
     setLoading(true)
-    const { data, error } = await supabase.rpc('create_participant_with_access_code', {
+    const { data, error } = await supabase.rpc('create_participant_with_access_code_v2', {
       p_code: accessCode,
       p_nama: nama.trim(),
       p_npm: npm.trim(),
@@ -557,7 +547,14 @@ export default function HomePage() {
       return alert(`Gagal memulai tes: ${error.message}`)
     }
 
-    setPesertaId(Number(data))
+    const participant = data as { participant_id?: number; submission_token?: string } | null
+    if (!participant?.participant_id || !participant.submission_token) {
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
+      return alert('Gagal memulai tes: sesi peserta tidak berhasil dibuat.')
+    }
+
+    setPesertaId(Number(participant.participant_id))
+    setSubmissionToken(participant.submission_token)
     setIndex(0)
     setDirectionAudioFinished(false)
     setListeningDirection('PART A')
@@ -573,60 +570,34 @@ export default function HomePage() {
   }, [])
   const nextSectionStructure = useCallback(() => { setIndex(0); setStep('reading') }, [])
 
-  const hitungSkor = useCallback((): ScoreResult => {
-    const rawL = listening.filter((s) => answersListening[s.id] === s.kunci_jawaban).length
-    const rawS = structure.filter((s) => answersStructure[s.id] === s.kunci_jawaban).length
-    const rawR = reading.filter((s) => answersReading[s.id] === s.kunci_jawaban).length
-    const scaledL = CONVERSION_LISTENING[rawL] ?? 31
-    const scaledS = CONVERSION_STRUCTURE[rawS] ?? 31
-    const scaledR = CONVERSION_READING[rawR] ?? 31
-    const totalScore = Math.round(((scaledL + scaledS + scaledR) * 10) / 3)
-    const cefr = totalScore >= 627 ? 'C1 (Advanced)' : totalScore >= 543 ? 'B2 (Upper-Intermediate)' : totalScore >= 460 ? 'B1 (Intermediate)' : 'A2 (Elementary)'
-    return { rawL, scaledL, rawS, scaledS, rawR, scaledR, totalScore, cefr }
-  }, [listening, structure, reading, answersListening, answersStructure, answersReading])
-
   const submit = useCallback(async () => {
-    if (!pesertaId || submitting.current) return
+    if (!pesertaId || !submissionToken || submitting.current) return
     submitting.current = true
     antiCheatActiveRef.current = false
     setLoading(true)
-    const result = hitungSkor()
     const violations = [...violationsRef.current]
     const statusTes = forcedTerminationRef.current ? 'dihentikan_pelanggaran' : 'selesai'
     const allQuestions = [...listening, ...structure, ...reading]
     const allAnswers = { ...answersListening, ...answersStructure, ...answersReading }
-    const payload = allQuestions.map((s) => ({
-      peserta_id: pesertaId,
-      section: s.section,
-      nomor_soal: s.nomor_soal,
-      jawaban: allAnswers[s.id] || 'X',
+    const answersPayload = allQuestions.map((question) => ({
+      question_id: question.id,
+      answer: allAnswers[question.id] || 'X',
     }))
 
-    const { error: answerError } = await supabase.from('jawaban_peserta').insert(payload)
-    const { error: participantError } = await supabase
-      .from('peserta')
-      .update({ skor_akhir: result.totalScore, cefr_level: result.cefr })
-      .eq('id', pesertaId)
+    const { data: scoreData, error: scoreError } = await supabase.rpc('submit_test_attempt', {
+      p_participant_id: pesertaId,
+      p_submission_token: submissionToken,
+      p_answers: answersPayload,
+      p_violations: violations,
+      p_status: statusTes,
+    })
 
-    if (answerError || participantError) {
-      alert(`Gagal menyimpan hasil: ${answerError?.message || participantError?.message}`)
+    if (scoreError || !scoreData) {
+      alert(`Gagal menyimpan hasil: ${scoreError?.message || 'hasil tidak diterima server'}`)
       submitting.current = false
       antiCheatActiveRef.current = true
       setLoading(false)
       return
-    }
-
-    const { error: antiCheatStorageError } = await supabase
-      .from('peserta')
-      .update({
-        pelanggaran_count: violations.length,
-        pelanggaran_detail: violations,
-        status_tes: statusTes,
-      })
-      .eq('id', pesertaId)
-
-    if (antiCheatStorageError) {
-      console.error('Detail pelanggaran belum tersimpan. Jalankan migrasi anti-cheating di Supabase:', antiCheatStorageError.message)
     }
 
     try {
@@ -635,18 +606,7 @@ export default function HomePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           participantId: pesertaId,
-          nama,
-          npm,
-          prodi,
-          email,
-          result,
-          questionTotals: {
-            listening: listening.length,
-            structure: structure.length,
-            reading: reading.length,
-          },
-          violations,
-          statusTes,
+          submissionToken,
         }),
       })
 
@@ -658,7 +618,7 @@ export default function HomePage() {
     setLoading(false)
     if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
     setStep('selesai')
-  }, [pesertaId, nama, npm, prodi, email, hitungSkor, listening, structure, reading, answersListening, answersStructure, answersReading])
+  }, [pesertaId, submissionToken, listening, structure, reading, answersListening, answersStructure, answersReading])
 
   useEffect(() => {
     submitRef.current = () => { void submit() }
@@ -923,7 +883,7 @@ export default function HomePage() {
         </div>
         <span style={antiCheatBadge}>Anti-cheating aktif · {violationCount}/2</span>
       </div>
-      <div style={topBar}><div><h3 style={{ margin: 0, color: '#4c1d95' }}>{title}</h3><span>{subtitle}</span></div><Timer seconds={duration} onTimeUp={timeUp} /></div>
+      <div style={topBar}><div><h3 style={{ margin: 0, color: '#4c1d95' }}>{title}</h3><span>{subtitle}</span></div><Timer key={step} seconds={duration} onTimeUp={timeUp} /></div>
       {step === 'listening' && listeningDirection ? (
         <section style={directionCard}>
           <div style={{ textAlign: 'center' }}>

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 
 const RESULT_RECIPIENT = 'erik.rusmana@unpas.ac.id'
 
@@ -30,6 +31,11 @@ interface ResultPayload {
     section: string
   }>
   statusTes: 'selesai' | 'dihentikan_pelanggaran'
+}
+
+interface EmailRequest {
+  participantId: number
+  submissionToken: string
 }
 
 function escapeHtml(value: unknown): string {
@@ -74,15 +80,35 @@ export async function POST(request: Request) {
   const apiKey = process.env.RESEND_API_KEY
   if (!apiKey) return NextResponse.json({ error: 'Email service is not configured.' }, { status: 503 })
 
-  let payload: Partial<ResultPayload>
+  let requestPayload: Partial<EmailRequest>
   try {
-    payload = await request.json()
+    requestPayload = await request.json()
   } catch {
     return NextResponse.json({ error: 'Invalid request.' }, { status: 400 })
   }
 
-  if (!isValidPayload(payload)) {
+  if (!Number.isInteger(requestPayload.participantId)
+    || Number(requestPayload.participantId) < 1
+    || typeof requestPayload.submissionToken !== 'string'
+    || requestPayload.submissionToken.length < 32
+    || requestPayload.submissionToken.length > 256
+  ) {
     return NextResponse.json({ error: 'Invalid result data.' }, { status: 400 })
+  }
+
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { auth: { persistSession: false, autoRefreshToken: false } }
+  )
+  const { data, error } = await supabase.rpc('get_result_for_email', {
+    p_participant_id: requestPayload.participantId,
+    p_submission_token: requestPayload.submissionToken,
+  })
+
+  const payload = data as Partial<ResultPayload> | null
+  if (error || !payload || !isValidPayload(payload)) {
+    return NextResponse.json({ error: 'Result not found or session is invalid.' }, { status: 403 })
   }
 
   const { participantId, nama, npm, prodi, email, result, questionTotals, violations, statusTes } = payload

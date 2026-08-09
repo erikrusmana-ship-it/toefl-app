@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { fetchWithRetry } from '@/lib/client-network'
+import { buildShuffledOptions, type OptionKey } from '@/lib/option-shuffle'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -1051,7 +1052,13 @@ export default function HomePage() {
     : step === 'listening'
       ? listeningPart(question)
       : (bagianStructure || question.part || title)
-  const options: Array<[string, string]> = [['A', question.pilihan_a], ['B', question.pilihan_b], ['C', question.pilihan_c], ['D', question.pilihan_d]]
+  const options = buildShuffledOptions(pesertaId || 0, question.id, [
+    { answerKey: 'A', text: question.pilihan_a },
+    { answerKey: 'B', text: question.pilihan_b },
+    { answerKey: 'C', text: question.pilihan_c },
+    { answerKey: 'D', text: question.pilihan_d },
+  ])
+  const writtenExpressionOptions: Array<[OptionKey, string]> = options.map(({ displayKey, text }) => [displayKey, text])
 
   const selectAnswer = (answer: string) => {
     if (step === 'listening') setAnswersListening((old) => ({ ...old, [question.id]: answer }))
@@ -1207,11 +1214,23 @@ export default function HomePage() {
             {isWrittenExpression ? (
               <>
                 <p style={{ marginBottom: 8, color: '#6b21a8', fontWeight: 600 }}>Pilih bagian bergaris bawah yang harus diperbaiki.</p>
-                <WrittenExpressionQuestion text={question.pertanyaan || ''} options={options} />
+                <WrittenExpressionQuestion text={question.pertanyaan || ''} options={writtenExpressionOptions} />
               </>
             ) : <p>{question.pertanyaan}</p>}
           </div>
-          <div style={optionList}>{options.map(([key, text]) => <button key={key} type="button" onClick={() => selectAnswer(key)} style={optionButton(answers[question.id] === key)}>({key}) {text}</button>)}</div>
+          <div style={optionList}>{options.map(({ displayKey, answerKey, text }) => (
+            <button
+              key={answerKey}
+              type="button"
+              onClick={() => selectAnswer(answerKey)}
+              style={optionButton(answers[question.id] === answerKey)}
+            >
+              ({displayKey}) {text}
+            </button>
+          ))}</div>
+          <p style={{ margin: '10px 0 0', color: '#6b7280', fontSize: 12 }}>
+            Urutan pilihan jawaban diacak khusus untuk setiap peserta.
+          </p>
         </div>
       </div>}
       {!listeningDirection && !listeningGroup && step === 'listening' && !answers[question.id] && (

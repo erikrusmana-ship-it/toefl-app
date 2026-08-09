@@ -27,8 +27,10 @@ export async function updateSession(request: NextRequest) {
   const isAdmin = claims?.app_metadata?.role === 'admin'
   const isAdminRoute = request.nextUrl.pathname.startsWith('/admin')
   const isLoginRoute = request.nextUrl.pathname === '/admin/login'
+  const isPasswordSetupRoute = request.nextUrl.pathname === '/admin/set-password'
+  const isPublicAdminRoute = isLoginRoute || isPasswordSetupRoute
 
-  if (isAdminRoute && !isLoginRoute && !isAdmin) {
+  if (isAdminRoute && !isPublicAdminRoute && !isAdmin) {
     const url = request.nextUrl.clone()
     url.pathname = '/admin/login'
     url.searchParams.set('next', request.nextUrl.pathname)

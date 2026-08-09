@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import { fetchWithRetry } from '@/lib/client-network'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -18,7 +19,7 @@ type AntiCheatViolation = { type: ViolationType; label: string; occurredAt: stri
 type ActiveStep = Exclude<Step, 'access' | 'biodata' | 'selesai'>
 type SaveState = 'idle' | 'saving' | 'saved' | 'pending'
 type ProgressData = {
-  version: 1
+  version: 2
   answersListening: Answers
   answersStructure: Answers
   answersReading: Answers
@@ -500,6 +501,8 @@ export default function HomePage() {
   const [listeningDirection, setListeningDirection] = useState<ListeningPart | null>(null)
   const [listeningGroup, setListeningGroup] = useState<ListeningGroup | null>(null)
   const [directionAudioFinished, setDirectionAudioFinished] = useState(false)
+  const [audioError, setAudioError] = useState('')
+  const [navigating, setNavigating] = useState(false)
   const [antiCheatWarning, setAntiCheatWarning] = useState<AntiCheatViolation | null>(null)
   const [violationCount, setViolationCount] = useState(0)
   const submitting = useRef(false)
@@ -509,6 +512,9 @@ export default function HomePage() {
   const forcedTerminationRef = useRef(false)
   const submitRef = useRef<() => void>(() => undefined)
   const saveSequenceRef = useRef(0)
+  const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve())
+  const progressRevisionRef = useRef(0)
+  const navigationLockedRef = useRef(false)
   const readingBelumTersedia = reading.length === 0
 
   useEffect(() => {
@@ -587,6 +593,7 @@ export default function HomePage() {
         section?: ActiveStep
         question?: number
         section_deadline?: string
+        progress_revision?: number
         progress?: Partial<ProgressData>
       }
       const activeStep: ActiveStep = ['listening', 'structure', 'reading'].includes(String(serverProgress.section))
@@ -610,6 +617,7 @@ export default function HomePage() {
       setListeningDirection(null)
       setListeningGroup(null)
       setSectionDeadline(serverProgress.section_deadline || new Date(Date.now() + 40 * 60 * 1000).toISOString())
+      progressRevisionRef.current = Math.max(0, Number(serverProgress.progress_revision) || 0)
       violationsRef.current = storedViolations
       setViolationCount(storedViolations.length)
       forcedTerminationRef.current = false
@@ -702,6 +710,7 @@ export default function HomePage() {
     }
 
     setPesertaId(Number(participant.participant_id))
+    progressRevisionRef.current = 0
     setSectionDeadline(participant.section_deadline || new Date(Date.now() + 40 * 60 * 1000).toISOString())
     setIndex(0)
     setDirectionAudioFinished(false)
@@ -739,11 +748,11 @@ export default function HomePage() {
       answer: allAnswers[question.id] || 'X',
     }))
 
-    const scoreResponse = await fetch('/api/test-submit', {
+    const scoreResponse = await fetchWithRetry('/api/test-submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ answers: answersPayload, violations, status: statusTes }),
-    })
+    }, { attempts: 3, timeoutMs: 20_000, baseDelayMs: 750 })
     const scoreData = await scoreResponse.json().catch(() => null)
 
     if (!scoreResponse.ok || !scoreData?.success) {
@@ -752,18 +761,6 @@ export default function HomePage() {
       antiCheatActiveRef.current = true
       setLoading(false)
       return
-    }
-
-    try {
-      const emailResponse = await fetch('/api/send-result', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      })
-
-      if (!emailResponse.ok) console.error('Email hasil TOEFL gagal dikirim.')
-    } catch {
-      console.error('Email hasil TOEFL gagal dikirim.')
     }
 
     setLoading(false)
@@ -776,13 +773,12 @@ export default function HomePage() {
     submitRef.current = () => { void submit() }
   }, [submit])
 
-  const persistProgress = useCallback(async () => {
-    if (!pesertaId || submitting.current || !['listening', 'structure', 'reading'].includes(step)) return
+  const persistProgress = useCallback(() => {
+    if (!pesertaId || submitting.current || !['listening', 'structure', 'reading'].includes(step)) return Promise.resolve(false)
     const sequence = ++saveSequenceRef.current
-    setSaveState('saving')
-
+    const revision = ++progressRevisionRef.current
     const progress: ProgressData = {
-      version: 1,
+      version: 2,
       answersListening,
       answersStructure,
       answersReading,
@@ -790,23 +786,32 @@ export default function HomePage() {
       violations: violationsRef.current.slice(0, 10),
     }
 
-    try {
-      const response = await fetch('/api/test-session', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ section: step, question: index + 1, progress }),
-      })
-      const result = await response.json().catch(() => null)
-      if (!response.ok) throw new Error(result?.error || 'Autosave failed')
-      if (sequence !== saveSequenceRef.current) return
-      if (typeof result?.section_deadline === 'string') setSectionDeadline(result.section_deadline)
-      setSaveState('saved')
-      setPageMessage('')
-    } catch (error) {
-      if (sequence !== saveSequenceRef.current) return
-      console.error('Autosave tertunda:', error)
-      setSaveState('pending')
-    }
+    // Semua autosave diproses berurutan. Ini mencegah request lama yang lambat
+    // menimpa jawaban atau posisi terbaru pada koneksi yang tidak stabil.
+    const queuedSave = saveQueueRef.current.catch(() => undefined).then(async () => {
+      setSaveState('saving')
+      try {
+        const response = await fetchWithRetry('/api/test-session', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ section: step, question: index + 1, revision, progress }),
+        }, { attempts: 3, timeoutMs: 10_000, baseDelayMs: 600 })
+        const result = await response.json().catch(() => null)
+        if (!response.ok) throw new Error(result?.error || 'Autosave failed')
+        if (sequence === saveSequenceRef.current) {
+          if (typeof result?.section_deadline === 'string') setSectionDeadline(result.section_deadline)
+          setSaveState('saved')
+          setPageMessage('')
+        }
+        return true
+      } catch (error) {
+        if (sequence === saveSequenceRef.current) setSaveState('pending')
+        console.error('Autosave tertunda:', error)
+        return false
+      }
+    })
+    saveQueueRef.current = queuedSave
+    return queuedSave
   }, [pesertaId, step, index, answersListening, answersStructure, answersReading, violationCount])
 
   useEffect(() => {
@@ -819,6 +824,13 @@ export default function HomePage() {
     if (!pesertaId || !['listening', 'structure', 'reading'].includes(step)) return
     const interval = window.setInterval(() => { void persistProgress() }, 30000)
     return () => window.clearInterval(interval)
+  }, [pesertaId, persistProgress, step])
+
+  useEffect(() => {
+    if (!pesertaId || !['listening', 'structure', 'reading'].includes(step)) return
+    const saveWhenOnline = () => { void persistProgress() }
+    window.addEventListener('online', saveWhenOnline)
+    return () => window.removeEventListener('online', saveWhenOnline)
   }, [pesertaId, persistProgress, step])
 
   const recordViolation = useCallback((type: ViolationType) => {
@@ -1048,6 +1060,15 @@ export default function HomePage() {
   }
 
   const next = () => {
+    if (navigationLockedRef.current) return
+    navigationLockedRef.current = true
+    setNavigating(true)
+    window.setTimeout(() => {
+      navigationLockedRef.current = false
+      setNavigating(false)
+    }, 450)
+
+    setAudioError('')
     if (step === 'listening' && !answersListening[question.id]) {
       setAnswersListening((old) => ({ ...old, [question.id]: 'X' }))
     }
@@ -1149,7 +1170,8 @@ export default function HomePage() {
             controls
             controlsList="nodownload noplaybackrate noremoteplayback"
             autoPlay
-            onEnded={() => setListeningGroup(null)}
+            onEnded={() => { setAudioError(''); setListeningGroup(null) }}
+            onError={() => setAudioError('Audio percakapan gagal dimuat. Periksa koneksi, lalu muat ulang halaman untuk melanjutkan sesi.')}
             onContextMenu={(event) => event.preventDefault()}
             src={listeningGroup.audio}
             style={{ width: '100%', margin: '12px 0' }}
@@ -1159,17 +1181,19 @@ export default function HomePage() {
           </p>
         </section>
       ) : step === 'listening' && (
-        <audio
+          <audio
           key={question.id}
           controls
           controlsList="nodownload noplaybackrate noremoteplayback"
           autoPlay
           onEnded={audioSelesai}
+          onError={() => setAudioError('Audio soal gagal dimuat. Anda tetap dapat memilih jawaban atau melewati soal ini.')}
           onContextMenu={(event) => event.preventDefault()}
           src={question.audio_url || `/audio/listening/no-${question.nomor_soal}.mp3`}
           style={{ width: '100%', marginBottom: 20 }}
         />
       )}
+      {audioError && <p role="alert" style={errorNotice}>{audioError}</p>}
       {!listeningDirection && !listeningGroup && <div style={isReading ? readingLayout : undefined}>
         {isReading && <div style={box}><h4>{question.passage_title}</h4><ReadingPassage title={question.passage_title} text={question.passage_text} /></div>}
         <div>
@@ -1200,10 +1224,10 @@ export default function HomePage() {
         <button
           type="button"
           onClick={next}
-          disabled={loading || (step !== 'listening' && !answers[question.id])}
-          style={purpleButton(loading || (step !== 'listening' && !answers[question.id]))}
+          disabled={loading || navigating || (step !== 'listening' && !answers[question.id])}
+          style={purpleButton(loading || navigating || (step !== 'listening' && !answers[question.id]))}
         >
-          {loading ? 'Menyimpan...' : isLast ? (isReading || readingBelumTersedia ? 'Selesaikan Uji Coba' : 'Lanjut Section Berikutnya') : 'Selanjutnya'}
+          {loading ? 'Menyimpan...' : navigating ? 'Memproses...' : isLast ? (isReading || readingBelumTersedia ? 'Selesaikan Uji Coba' : 'Lanjut Section Berikutnya') : 'Selanjutnya'}
         </button>
       </div>}
     </main>

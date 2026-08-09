@@ -106,6 +106,18 @@ export async function POST(request: Request) {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     { auth: { persistSession: false, autoRefreshToken: false } }
   )
+  const markEmailDelivery = async (participantId: number, status: 'sending' | 'sent' | 'failed', errorMessage: string | null = null) => {
+    try {
+      await supabase.rpc('mark_result_email_delivery', {
+        p_participant_id: participantId,
+        p_submission_token: sessionSubmissionToken,
+        p_status: status,
+        p_error: errorMessage,
+      })
+    } catch (trackingError) {
+      console.error('Email delivery tracking failed:', trackingError)
+    }
+  }
   const { data, error } = await supabase.rpc('get_result_for_email', {
     p_participant_id: sessionParticipantId,
     p_submission_token: sessionSubmissionToken,
@@ -117,6 +129,7 @@ export async function POST(request: Request) {
   }
 
   const { participantId, nama, npm, prodi, email, result, questionTotals, violations, statusTes } = payload
+  await markEmailDelivery(participantId, 'sending')
   const submittedAt = new Date().toLocaleString('id-ID', {
     timeZone: 'Asia/Jakarta',
     dateStyle: 'full',
@@ -191,8 +204,11 @@ export async function POST(request: Request) {
   const responseBody = await response.json().catch(() => null)
   if (!response.ok) {
     console.error('Resend API error:', response.status, responseBody)
+    await markEmailDelivery(participantId, 'failed', `Resend ${response.status}: ${JSON.stringify(responseBody).slice(0, 350)}`)
     return NextResponse.json({ error: 'Failed to send result email.' }, { status: 502 })
   }
+
+  await markEmailDelivery(participantId, 'sent')
 
   return NextResponse.json({ success: true })
 }

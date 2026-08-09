@@ -68,7 +68,7 @@ export async function PUT(request: Request) {
   const session = await readTestSession()
   if (!session) return noStore({ error: 'Sesi tes tidak ditemukan.' }, 401)
 
-  let payload: { section?: unknown; question?: unknown; progress?: unknown }
+  let payload: { section?: unknown; question?: unknown; revision?: unknown; progress?: unknown }
   try {
     payload = await request.json()
   } catch {
@@ -79,6 +79,7 @@ export async function PUT(request: Request) {
     || !Number.isInteger(payload.question)
     || Number(payload.question) < 1
     || Number(payload.question) > 50
+    || (payload.revision !== undefined && (!Number.isInteger(payload.revision) || Number(payload.revision) < 1))
     || !payload.progress
     || typeof payload.progress !== 'object'
     || Array.isArray(payload.progress)
@@ -86,13 +87,28 @@ export async function PUT(request: Request) {
     return noStore({ error: 'Posisi tes tidak valid.' }, 400)
   }
 
-  const { data, error } = await supabase.rpc('save_test_progress', {
+  const revision = Number(payload.revision) || Date.now()
+  let { data, error } = await supabase.rpc('save_test_progress_v2', {
     p_participant_id: session.participantId,
     p_submission_token: session.submissionToken,
     p_section: payload.section,
     p_question: payload.question,
+    p_revision: revision,
     p_progress: payload.progress,
   })
+
+  // Kompatibilitas singkat selama migrasi Production diterapkan sebelum deploy.
+  if (error?.code === 'PGRST202' || /save_test_progress_v2/i.test(error?.message || '')) {
+    const legacyResult = await supabase.rpc('save_test_progress', {
+      p_participant_id: session.participantId,
+      p_submission_token: session.submissionToken,
+      p_section: payload.section,
+      p_question: payload.question,
+      p_progress: payload.progress,
+    })
+    data = legacyResult.data
+    error = legacyResult.error
+  }
   if (error || !data) {
     console.error('Autosave RPC failed:', error?.message)
     return noStore({ error: 'Autosave belum berhasil. Sistem akan mencoba kembali.' }, 503)
@@ -106,4 +122,3 @@ export async function DELETE() {
   response.cookies.set(TEST_SESSION_COOKIE, '', { path: '/', maxAge: 0 })
   return response
 }
-

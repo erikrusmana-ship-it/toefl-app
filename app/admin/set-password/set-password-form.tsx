@@ -16,13 +16,31 @@ export default function SetPasswordForm() {
     const supabase = createClient()
 
     const prepareSession = async () => {
-      const code = new URLSearchParams(window.location.search).get('code')
+      const searchParams = new URLSearchParams(window.location.search)
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+      const code = searchParams.get('code')
+      const accessToken = hashParams.get('access_token')
+      const refreshToken = hashParams.get('refresh_token')
+
       if (code) {
         const exchange = await supabase.auth.exchangeCodeForSession(code)
         if (exchange.error) {
           setError('Tautan aktivasi tidak valid atau sudah kedaluwarsa.')
           return
         }
+      } else if (accessToken && refreshToken) {
+        const session = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        })
+        if (session.error) {
+          setError('Tautan aktivasi tidak valid atau sudah kedaluwarsa.')
+          return
+        }
+      }
+
+      if (code || (accessToken && refreshToken)) {
+        window.history.replaceState(null, '', window.location.pathname)
       }
 
       const { data } = await supabase.auth.getSession()

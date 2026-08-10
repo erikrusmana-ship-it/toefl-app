@@ -958,8 +958,9 @@ export default function HomePage() {
           </div>
 
           <div style={rulesPanel}>
-            <strong>Aturan sebelum memulai</strong>
-            <ul style={{ margin: '10px 0 0', paddingLeft: 20, lineHeight: 1.7 }}>
+            <strong style={{ display: 'block', fontSize: 18 }}>PERHATIAN!</strong>
+            <strong style={{ display: 'block', marginTop: 6 }}>Aturan sebelum memulai</strong>
+            <ul style={{ margin: '10px 0 0', paddingLeft: 20, lineHeight: 1.7, fontWeight: 700 }}>
               <li>Gunakan Google Chrome dan izinkan mode fullscreen.</li>
               <li>Siapkan headset atau earphone untuk Section Listening.</li>
               <li>Jangan membuka tab, jendela, atau aplikasi lain selama tes.</li>

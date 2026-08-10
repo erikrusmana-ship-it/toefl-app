@@ -222,7 +222,11 @@ begin
   if p_count < 1 or p_count > 500 then
     raise exception 'Jumlah kode harus antara 1 dan 500.';
   end if;
-  if not exists (select 1 from public.test_packages where code = p_package_code) then
+  if not exists (
+    select 1
+    from public.test_packages as package
+    where package.code = p_package_code
+  ) then
     raise exception 'Paket tes tidak ditemukan.';
   end if;
 

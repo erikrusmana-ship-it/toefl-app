@@ -23,6 +23,7 @@ type Participant = {
   current_section: string
   current_question: number
   section_deadline: string
+  package_code: string
 }
 
 type AccessCode = {
@@ -32,9 +33,14 @@ type AccessCode = {
   use_count: number
   last_used_at: string | null
   created_at: string
+  package_code: string
 }
 
-type QuestionSection = { section: string }
+type QuestionSection = { section: string; package_code: string }
+
+function packageLabel(code: string) {
+  return code === 'model_a' ? 'Model A' : code === 'model_b' ? 'Paket B' : code
+}
 
 function formatDate(value: string | null) {
   if (!value) return '—'
@@ -72,15 +78,15 @@ export default async function AdminPage() {
   const [participantsResult, accessCodesResult, questionsResult, timeResult] = await Promise.all([
     supabase
       .from('peserta')
-      .select('id,nama,npm,prodi,email,skor_akhir,cefr_level,status_tes,pelanggaran_count,created_at,submitted_at,test_started_at,last_activity_at,current_section,current_question,section_deadline')
+      .select('id,nama,npm,prodi,email,skor_akhir,cefr_level,status_tes,pelanggaran_count,created_at,submitted_at,test_started_at,last_activity_at,current_section,current_question,section_deadline,package_code')
       .order('created_at', { ascending: false })
       .limit(250),
     supabase
       .from('test_access_codes')
-      .select('id,batch,is_active,use_count,last_used_at,created_at')
+      .select('id,batch,is_active,use_count,last_used_at,created_at,package_code')
       .order('id', { ascending: true })
       .limit(500),
-    supabase.from('soal').select('section'),
+    supabase.from('soal').select('section,package_code'),
     supabase.rpc('get_monitoring_time'),
   ])
 
@@ -97,7 +103,8 @@ export default async function AdminPage() {
   const activeCodes = accessCodes.filter((code) => code.is_active).length
   const sectionCounts = questions.reduce<Record<string, number>>((result, question) => {
     const section = question.section.trim().toLowerCase()
-    const key = section.includes('listen') ? 'Listening' : section.includes('struct') ? 'Structure' : section.includes('read') ? 'Reading' : question.section
+    const sectionName = section.includes('listen') ? 'Listening' : section.includes('struct') ? 'Structure' : section.includes('read') ? 'Reading' : question.section
+    const key = `${packageLabel(question.package_code)} · ${sectionName}`
     result[key] = (result[key] || 0) + 1
     return result
   }, {})
@@ -154,7 +161,7 @@ export default async function AdminPage() {
                   const status = statuses.get(participant.id)!
                   return <tr key={participant.id} className="border-b border-slate-100 align-top">
                     <td className="px-3 py-3 font-semibold">{participant.nama}</td><td className="px-3 py-3">{participant.npm || '—'}</td><td className="px-3 py-3">{participant.prodi || '—'}</td><td className="px-3 py-3">{participant.email}</td>
-                    <td className="px-3 py-3"><strong>{sectionLabel(participant.current_section)}</strong><br /><span className="text-xs text-slate-500">Soal {participant.current_question}</span></td>
+                    <td className="px-3 py-3"><strong>{sectionLabel(participant.current_section)}</strong><br /><span className="text-xs text-slate-500">{packageLabel(participant.package_code)} · Soal {participant.current_question}</span></td>
                     <td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-xs font-bold ${status.className}`}>{status.label}</span></td>
                     <td className="px-3 py-3">{formatDate(participant.last_activity_at)}</td>
                     <td className="px-3 py-3 font-bold text-violet-900">{participant.skor_akhir ?? '—'}</td><td className="px-3 py-3">{participant.cefr_level || '—'}</td>
@@ -170,15 +177,15 @@ export default async function AdminPage() {
         <section className="grid gap-6 lg:grid-cols-[1fr_2fr]">
           <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-violet-100">
             <h2 className="text-xl font-bold text-violet-950">Bank soal</h2>
-            <div className="mt-4 space-y-3">{['Listening','Structure','Reading'].map((section) => <div key={section} className="flex justify-between rounded-xl bg-violet-50 px-4 py-3"><span>{section}</span><strong>{sectionCounts[section] || 0} soal</strong></div>)}</div>
+            <div className="mt-4 space-y-3">{['Paket B · Listening','Paket B · Structure','Paket B · Reading','Model A · Listening','Model A · Structure','Model A · Reading'].map((section) => <div key={section} className="flex justify-between rounded-xl bg-violet-50 px-4 py-3"><span>{section}</span><strong>{sectionCounts[section] || 0} soal</strong></div>)}</div>
           </div>
           <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-violet-100">
             <h2 className="text-xl font-bold text-violet-950">Kode akses</h2>
             <p className="mt-1 text-sm text-slate-500">Kode asli tetap dirahasiakan; dashboard hanya menampilkan statistik penggunaan.</p>
             <div className="mt-4 max-h-[430px] overflow-auto">
               <table className="w-full min-w-[650px] border-collapse text-sm">
-                <thead><tr className="sticky top-0 bg-violet-100 text-left text-violet-950"><th className="px-3 py-3">ID</th><th className="px-3 py-3">Batch</th><th className="px-3 py-3">Pemakaian</th><th className="px-3 py-3">Terakhir</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Aksi</th></tr></thead>
-                <tbody>{accessCodes.map((code) => <tr key={code.id} className="border-b border-slate-100"><td className="px-3 py-3">{code.id}</td><td className="px-3 py-3">{code.batch}</td><td className="px-3 py-3">{code.use_count}</td><td className="px-3 py-3">{formatDate(code.last_used_at)}</td><td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-xs font-bold ${code.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'}`}>{code.is_active ? 'Aktif' : 'Nonaktif'}</span></td><td className="px-3 py-3"><form action={toggleAccessCode}><input type="hidden" name="id" value={code.id} /><input type="hidden" name="nextState" value={String(!code.is_active)} /><button className="font-bold text-violet-800 underline">{code.is_active ? 'Nonaktifkan' : 'Aktifkan'}</button></form></td></tr>)}</tbody>
+                <thead><tr className="sticky top-0 bg-violet-100 text-left text-violet-950"><th className="px-3 py-3">ID</th><th className="px-3 py-3">Paket</th><th className="px-3 py-3">Batch</th><th className="px-3 py-3">Pemakaian</th><th className="px-3 py-3">Terakhir</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Aksi</th></tr></thead>
+                <tbody>{accessCodes.map((code) => <tr key={code.id} className="border-b border-slate-100"><td className="px-3 py-3">{code.id}</td><td className="px-3 py-3 font-semibold">{packageLabel(code.package_code)}</td><td className="px-3 py-3">{code.batch}</td><td className="px-3 py-3">{code.use_count}</td><td className="px-3 py-3">{formatDate(code.last_used_at)}</td><td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-xs font-bold ${code.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'}`}>{code.is_active ? 'Aktif' : 'Nonaktif'}</span></td><td className="px-3 py-3"><form action={toggleAccessCode}><input type="hidden" name="id" value={code.id} /><input type="hidden" name="nextState" value={String(!code.is_active)} /><button className="font-bold text-violet-800 underline">{code.is_active ? 'Nonaktifkan' : 'Aktifkan'}</button></form></td></tr>)}</tbody>
               </table>
             </div>
           </div>

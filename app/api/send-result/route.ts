@@ -10,6 +10,7 @@ interface ResultPayload {
   npm: string
   prodi: string
   email: string
+  packageName: string
   result: {
     rawL: number
     scaledL: number
@@ -65,7 +66,7 @@ function isValidPayload(payload: Partial<ResultPayload>): payload is ResultPaylo
 
   return Boolean(
     Number.isInteger(payload.participantId) && Number(payload.participantId) > 0 &&
-    payload.nama?.trim() && payload.npm?.trim() && payload.prodi?.trim() &&
+    payload.nama?.trim() && payload.npm?.trim() && payload.prodi?.trim() && payload.packageName?.trim() &&
     payload.email?.includes('@') && result && totals &&
     validNumber(result.rawL) && validNumber(result.scaledL) &&
     validNumber(result.rawS) && validNumber(result.scaledS) &&
@@ -128,7 +129,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Result not found or session is invalid.' }, { status: 403 })
   }
 
-  const { participantId, nama, npm, prodi, email, result, questionTotals, violations, statusTes } = payload
+  const { participantId, nama, npm, prodi, email, packageName, result, questionTotals, violations, statusTes } = payload
   await markEmailDelivery(participantId, 'sending')
   const submittedAt = new Date().toLocaleString('id-ID', {
     timeZone: 'Asia/Jakarta',
@@ -163,15 +164,16 @@ export async function POST(request: Request) {
       from: 'TOEFL UNPAS <onboarding@resend.dev>',
       to: [RESULT_RECIPIENT],
       reply_to: email,
-      subject: `${statusTes === 'dihentikan_pelanggaran' ? '[PELANGGARAN] ' : ''}Hasil TOEFL — ${nama} (${npm})`,
+      subject: `${statusTes === 'dihentikan_pelanggaran' ? '[PELANGGARAN] ' : ''}Hasil English Proficiency Test — ${nama} (${npm})`,
       html: `
         <div style="font-family:Arial,sans-serif;max-width:680px;margin:auto;color:#1f2937">
-          <h2 style="color:#4c1d95">Hasil Tes TOEFL ITP</h2>
+          <h2 style="color:#4c1d95">Hasil English Proficiency Test</h2>
           <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
             <tr><td style="padding:7px;border-bottom:1px solid #ddd"><strong>Nama</strong></td><td style="padding:7px;border-bottom:1px solid #ddd">${escapeHtml(nama)}</td></tr>
             <tr><td style="padding:7px;border-bottom:1px solid #ddd"><strong>NPM</strong></td><td style="padding:7px;border-bottom:1px solid #ddd">${escapeHtml(npm)}</td></tr>
             <tr><td style="padding:7px;border-bottom:1px solid #ddd"><strong>Prodi</strong></td><td style="padding:7px;border-bottom:1px solid #ddd">${escapeHtml(prodi)}</td></tr>
             <tr><td style="padding:7px;border-bottom:1px solid #ddd"><strong>Email</strong></td><td style="padding:7px;border-bottom:1px solid #ddd">${escapeHtml(email)}</td></tr>
+            <tr><td style="padding:7px;border-bottom:1px solid #ddd"><strong>Paket soal</strong></td><td style="padding:7px;border-bottom:1px solid #ddd">${escapeHtml(packageName)}</td></tr>
             <tr><td style="padding:7px;border-bottom:1px solid #ddd"><strong>Waktu selesai</strong></td><td style="padding:7px;border-bottom:1px solid #ddd">${escapeHtml(submittedAt)}</td></tr>
             <tr><td style="padding:7px;border-bottom:1px solid #ddd"><strong>Status tes</strong></td><td style="padding:7px;border-bottom:1px solid #ddd">${escapeHtml(testStatusLabel)}</td></tr>
             <tr><td style="padding:7px;border-bottom:1px solid #ddd"><strong>Jumlah pelanggaran</strong></td><td style="padding:7px;border-bottom:1px solid #ddd">${violations.length}</td></tr>
@@ -185,7 +187,7 @@ export async function POST(request: Request) {
             </tbody>
           </table>
           <div style="margin-top:24px;padding:18px;background:#faf5ff;border-radius:10px;text-align:center">
-            <div style="font-size:15px">Total TOEFL Score</div>
+            <div style="font-size:15px">Total English Proficiency Test Score</div>
             <div style="font-size:42px;font-weight:bold;color:#581c87">${result.totalScore}</div>
             <div><strong>CEFR:</strong> ${escapeHtml(result.cefr)}</div>
           </div>

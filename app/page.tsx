@@ -13,6 +13,7 @@ const supabase = createClient(
 
 type Step = 'access' | 'biodata' | 'listening' | 'structure' | 'reading' | 'selesai'
 type Answers = Record<number, string>
+type PackageCode = 'model_a' | 'model_b'
 type ListeningPart = 'PART A' | 'PART B' | 'PART C'
 type ListeningGroup = { title: string; audio: string; firstQuestion: number; lastQuestion: number }
 type ViolationType = 'TAB_HIDDEN' | 'WINDOW_BLUR' | 'FULLSCREEN_EXIT'
@@ -163,6 +164,10 @@ const LISTENING_GROUPS: Record<number, ListeningGroup> = {
   47: { title: 'Part C — Third Talk', audio: '/audio/listening/talk-47-50.mp3', firstQuestion: 47, lastQuestion: 50 },
 }
 
+function packageAudioPath(path: string, packageCode: PackageCode) {
+  return packageCode === 'model_a' ? path.replace('/audio/listening/', '/audio/model-a/listening/') : path
+}
+
 const READING_PASSAGE_LINES: Record<string, string[]> = {
   'Frank Lloyd Wright and Functionalism': [
     'A distinctively American architecture began with Frank Lloyd Wright, who had',
@@ -304,6 +309,11 @@ const READING_PARAGRAPH_STARTS: Record<string, number[]> = {
   'Australopithecus robustus and Tool Use': [1, 8, 13, 20],
   'The Changing Focus of Medical Research': [1, 10, 14, 21],
   'Industrialization in the United States': [1, 7, 13, 21],
+  'The Ocean Bottom and the Glomar Challenger': [1, 8, 15, 24],
+  "Canada's Postwar Population Growth": [1, 14, 23],
+  'Organically Grown Foods': [1, 5, 11, 14, 18],
+  'The Origins of Drama in Ancient Greece': [1, 10, 21],
+  'Post-Civil War Reconstruction': [1, 6, 9, 14, 17, 20],
 }
 
 function listeningPart(soal: SoalItem): ListeningPart {
@@ -314,6 +324,7 @@ function listeningPart(soal: SoalItem): ListeningPart {
 
 interface SoalItem {
   id: number
+  package_code: PackageCode
   section: string
   nomor_soal: number
   part?: string
@@ -397,7 +408,8 @@ function WrittenExpressionQuestion({ text, options }: { text: string; options: A
 }
 
 function ReadingPassage({ title, text }: { title?: string; text?: string }) {
-  const lines = title ? READING_PASSAGE_LINES[title] : undefined
+  const storedLines = text?.includes('\n') ? text.split('\n').filter((line) => line.trim()) : undefined
+  const lines = title ? READING_PASSAGE_LINES[title] || storedLines : storedLines
 
   if (!lines) {
     return (
@@ -461,10 +473,11 @@ function pilihSoalTes(data: SoalItem[], kataKunci: string, maksimum: number): So
   return Array.from(unik.values()).slice(0, maksimum)
 }
 
-async function fetchQuestionBank() {
+async function fetchQuestionBank(packageCode: PackageCode) {
   const { data, error } = await supabase
     .from('soal')
-    .select('id,section,nomor_soal,part,audio_url,passage_title,passage_text,pertanyaan,pilihan_a,pilihan_b,pilihan_c,pilihan_d')
+    .select('id,package_code,section,nomor_soal,part,audio_url,passage_title,passage_text,pertanyaan,pilihan_a,pilihan_b,pilihan_c,pilihan_d')
+    .eq('package_code', packageCode)
     .order('id', { ascending: true })
 
   if (error) throw error
@@ -482,6 +495,8 @@ export default function HomePage() {
   const [npm, setNpm] = useState('')
   const [prodi, setProdi] = useState('')
   const [email, setEmail] = useState('')
+  const [packageCode, setPackageCode] = useState<PackageCode>('model_b')
+  const [packageName, setPackageName] = useState('Paket B')
   const [pesertaId, setPesertaId] = useState<number | null>(null)
   const [step, setStep] = useState<Step>('access')
   const [index, setIndex] = useState(0)
@@ -538,19 +553,22 @@ export default function HomePage() {
     if (!normalizedCode) return
 
     setLoading(true)
-    const { data, error } = await supabase.rpc('is_access_code_available', { p_code: normalizedCode })
+    const { data, error } = await supabase.rpc('get_access_code_test_package', { p_code: normalizedCode })
     setLoading(false)
 
     if (error) {
       alert(`Gagal memeriksa kode akses: ${error.message}`)
       return
     }
-    if (!data) {
+    const packageInfo = data as { valid?: boolean; package_code?: string; package_name?: string } | null
+    if (!packageInfo?.valid || !['model_a', 'model_b'].includes(String(packageInfo.package_code))) {
       alert('Kode akses tidak valid atau sudah dinonaktifkan.')
       return
     }
 
     setAccessCode(normalizedCode)
+    setPackageCode(packageInfo.package_code as PackageCode)
+    setPackageName(packageInfo.package_name || 'Paket Tes')
     setStep('biodata')
   }
 
@@ -559,7 +577,7 @@ export default function HomePage() {
 
     const load = async () => {
       try {
-        const bank = await fetchQuestionBank()
+        const bank = await fetchQuestionBank(packageCode)
         setListening(bank.listening)
         setStructure(bank.structure)
         setReading(bank.reading)
@@ -569,7 +587,7 @@ export default function HomePage() {
       setIsFetching(false)
     }
     void load()
-  }, [step])
+  }, [step, packageCode])
 
   const resumePreviousTest = async () => {
     setLoading(true)
@@ -578,15 +596,17 @@ export default function HomePage() {
       if (!isGoogleChrome()) throw new Error('Chrome required')
       if (!document.fullscreenEnabled) throw new Error('Fullscreen unavailable')
 
-      const [sessionResponse, bank] = await Promise.all([
-        fetch('/api/test-session', { cache: 'no-store' }),
-        fetchQuestionBank(),
-      ])
+      const sessionResponse = await fetch('/api/test-session', { cache: 'no-store' })
       const sessionData = await sessionResponse.json()
       if (!sessionResponse.ok || !sessionData?.hasSession || sessionData?.progress?.submitted) {
         setResumeAvailable(false)
         throw new Error('Sesi peserta tidak valid.')
       }
+
+      const restoredPackageCode = ['model_a', 'model_b'].includes(String(sessionData.progress?.package_code))
+        ? sessionData.progress.package_code as PackageCode
+        : 'model_b'
+      const bank = await fetchQuestionBank(restoredPackageCode)
 
       await document.documentElement.requestFullscreen({ navigationUI: 'hide' })
 
@@ -610,6 +630,8 @@ export default function HomePage() {
       setListening(bank.listening)
       setStructure(bank.structure)
       setReading(bank.reading)
+      setPackageCode(restoredPackageCode)
+      setPackageName(sessionData.progress?.package_name || (restoredPackageCode === 'model_a' ? 'TOEFL Model A' : 'Paket B'))
       setAnswersListening(normalizeAnswers(storedProgress.answersListening))
       setAnswersStructure(normalizeAnswers(storedProgress.answersStructure))
       setAnswersReading(normalizeAnswers(storedProgress.answersReading))
@@ -691,7 +713,7 @@ export default function HomePage() {
       return alert(`Gagal memulai tes: ${error.message}`)
     }
 
-    const participant = data as { participant_id?: number; submission_token?: string; section_deadline?: string } | null
+    const participant = data as { participant_id?: number; submission_token?: string; section_deadline?: string; package_code?: string; package_name?: string } | null
     if (!participant?.participant_id || !participant.submission_token) {
       setLoading(false)
       if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
@@ -711,6 +733,8 @@ export default function HomePage() {
     }
 
     setPesertaId(Number(participant.participant_id))
+    if (['model_a', 'model_b'].includes(String(participant.package_code))) setPackageCode(participant.package_code as PackageCode)
+    if (participant.package_name) setPackageName(participant.package_name)
     progressRevisionRef.current = 0
     setSectionDeadline(participant.section_deadline || new Date(Date.now() + 40 * 60 * 1000).toISOString())
     setIndex(0)
@@ -995,8 +1019,8 @@ export default function HomePage() {
           <div style={logoFrame}>
             <img src="/logo-unpas.png" alt="Logo UNPAS" style={{ display: 'block', width: 330, height: 330, objectFit: 'contain', flex: '0 0 auto' }} />
           </div>
-          <h2 style={{ color: '#4c1d95', textAlign: 'center' }}>Form Peserta Tes TOEFL</h2>
-          <p style={{ marginTop: -4, textAlign: 'center', color: '#166534', fontWeight: 700 }}>Kode akses diterima</p>
+          <h2 style={{ color: '#4c1d95', textAlign: 'center' }}>Form Peserta English Proficiency Test</h2>
+          <p style={{ marginTop: -4, textAlign: 'center', color: '#166534', fontWeight: 700 }}>Kode akses diterima · {packageName}</p>
           {pageMessage && <p role="alert" style={errorNotice}>{pageMessage}</p>}
           {isFetching ? <p style={{ textAlign: 'center' }}>Memuat bank soal...</p> : (
             <form onSubmit={start} style={form}>
@@ -1008,7 +1032,7 @@ export default function HomePage() {
                 <strong>Aturan anti-cheating</strong>
                 <span>Gunakan Google Chrome dan izinkan fullscreen. Membuka tab, jendela, atau aplikasi lain dihitung sebagai pelanggaran. Pelanggaran kedua akan mengakhiri tes otomatis.</span>
               </div>
-              <button type="submit" disabled={loading} style={purpleButton(loading)}>{loading ? 'Menyimpan...' : 'Mulai Tes TOEFL'}</button>
+              <button type="submit" disabled={loading} style={purpleButton(loading)}>{loading ? 'Menyimpan...' : 'Mulai English Proficiency Test'}</button>
             </form>
           )}
         </div>
@@ -1085,7 +1109,7 @@ export default function HomePage() {
       if (step === 'listening') {
         const nextPart = listeningPart(listening[nextIndex])
         const nextGroup = LISTENING_GROUPS[listening[nextIndex].nomor_soal]
-        setListeningGroup(nextGroup || null)
+        setListeningGroup(nextGroup ? { ...nextGroup, audio: packageAudioPath(nextGroup.audio, packageCode) } : null)
         if (nextPart !== listeningPart(question)) {
           setDirectionAudioFinished(false)
           setListeningDirection(nextPart)
@@ -1121,7 +1145,7 @@ export default function HomePage() {
         <img src="/logo-unpas.png" alt="Logo UNPAS" style={{ width: 56, height: 56, objectFit: 'contain', background: '#fff', borderRadius: 10, padding: 4 }} />
         <div>
           <strong style={{ display: 'block', fontSize: 16 }}>English Proficiency Test</strong>
-          <span style={{ fontSize: 13, opacity: 0.9 }}>Laboratorium Prodi Sastra Inggris UNPAS</span>
+          <span style={{ fontSize: 13, opacity: 0.9 }}>Laboratorium Prodi Sastra Inggris UNPAS · {packageName}</span>
         </div>
         <span style={antiCheatBadge}>Anti-cheating aktif · {violationCount}/2</span>
       </div>
@@ -1150,7 +1174,7 @@ export default function HomePage() {
             onEnded={() => setDirectionAudioFinished(true)}
             onError={() => setDirectionAudioFinished(true)}
             onContextMenu={(event) => event.preventDefault()}
-            src={LISTENING_DIRECTIONS[listeningDirection].audio}
+            src={packageAudioPath(LISTENING_DIRECTIONS[listeningDirection].audio, packageCode)}
             style={{ width: '100%', margin: '12px 0 20px' }}
           />
           <div style={directionText}>{LISTENING_DIRECTIONS[listeningDirection].text}</div>
@@ -1196,7 +1220,7 @@ export default function HomePage() {
           onEnded={audioSelesai}
           onError={() => setAudioError('Audio soal gagal dimuat. Anda tetap dapat memilih jawaban atau melewati soal ini.')}
           onContextMenu={(event) => event.preventDefault()}
-          src={question.audio_url || `/audio/listening/no-${question.nomor_soal}.mp3`}
+          src={question.audio_url || packageAudioPath(`/audio/listening/no-${question.nomor_soal}.mp3`, packageCode)}
           style={{ width: '100%', marginBottom: 20 }}
         />
       )}

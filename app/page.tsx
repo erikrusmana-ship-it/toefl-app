@@ -667,9 +667,40 @@ export default function HomePage() {
     setPageMessage('Sesi pada perangkat ini telah dihapus. Anda dapat memulai tes baru.')
   }
 
-  const start = async (event: FormEvent) => {
+  const start = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setPageMessage('')
+
+    // Baca langsung dari form agar nilai yang diisi oleh autofill Chrome tetap
+    // terkirim meskipun browser tidak memicu onChange pada controlled input.
+    const formData = new FormData(event.currentTarget)
+    const participantNama = String(formData.get('nama') || '').trim()
+    const participantNpm = String(formData.get('npm') || '').trim()
+    const participantProdi = String(formData.get('prodi') || '').trim()
+    const participantEmail = String(formData.get('email') || '').trim().toLowerCase()
+
+    if (participantNama.length < 2) {
+      setPageMessage('Nama Lengkap belum terisi dengan benar.')
+      return
+    }
+    if (participantNpm.length < 2) {
+      setPageMessage('NPM belum terisi dengan benar.')
+      return
+    }
+    if (participantProdi.length < 2) {
+      setPageMessage('Prodi belum terisi dengan benar.')
+      return
+    }
+    if (participantEmail.length < 5) {
+      setPageMessage('Alamat Email belum terisi dengan benar.')
+      return
+    }
+
+    setNama(participantNama)
+    setNpm(participantNpm)
+    setProdi(participantProdi)
+    setEmail(participantEmail)
+
     if (!listening.length || !structure.length) {
       alert('Soal Listening atau Structure belum tersedia. Cek kolom section pada tabel soal.')
       return
@@ -701,10 +732,10 @@ export default function HomePage() {
     setLoading(true)
     const { data, error } = await supabase.rpc('create_participant_with_access_code_v2', {
       p_code: accessCode,
-      p_nama: nama.trim(),
-      p_npm: npm.trim(),
-      p_prodi: prodi.trim(),
-      p_email: email.trim().toLowerCase(),
+      p_nama: participantNama,
+      p_npm: participantNpm,
+      p_prodi: participantProdi,
+      p_email: participantEmail,
     })
     if (error) {
       setLoading(false)
@@ -1025,10 +1056,10 @@ export default function HomePage() {
           {pageMessage && <p role="alert" style={errorNotice}>{pageMessage}</p>}
           {isFetching ? <p style={{ textAlign: 'center' }}>Memuat bank soal...</p> : (
             <form onSubmit={start} style={form}>
-              <label style={fieldLabel}>Nama Lengkap<input required autoComplete="name" value={nama} onChange={(e) => setNama(e.target.value)} placeholder="Masukkan nama lengkap" style={input} /></label>
-              <label style={fieldLabel}>NPM<input required inputMode="numeric" value={npm} onChange={(e) => setNpm(e.target.value)} placeholder="Masukkan NPM" style={input} /></label>
-              <label style={fieldLabel}>Prodi<input required value={prodi} onChange={(e) => setProdi(e.target.value)} placeholder="Masukkan program studi" style={input} /></label>
-              <label style={fieldLabel}>Alamat Email<input required type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nama@email.com" style={input} /></label>
+              <label style={fieldLabel}>Nama Lengkap<input required minLength={2} name="nama" autoComplete="name" value={nama} onChange={(e) => setNama(e.target.value)} placeholder="Masukkan nama lengkap" style={input} /></label>
+              <label style={fieldLabel}>NPM<input required minLength={2} name="npm" inputMode="numeric" value={npm} onChange={(e) => setNpm(e.target.value)} placeholder="Masukkan NPM" style={input} /></label>
+              <label style={fieldLabel}>Prodi<input required minLength={2} name="prodi" value={prodi} onChange={(e) => setProdi(e.target.value)} placeholder="Masukkan program studi" style={input} /></label>
+              <label style={fieldLabel}>Alamat Email<input required minLength={5} name="email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nama@email.com" style={input} /></label>
               <div style={antiCheatNotice}>
                 <strong>Aturan anti-cheating</strong>
                 <span>Gunakan Google Chrome dan izinkan fullscreen. Membuka tab, jendela, atau aplikasi lain dihitung sebagai pelanggaran. Pelanggaran kedua akan mengakhiri tes otomatis.</span>

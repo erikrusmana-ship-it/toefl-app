@@ -1108,12 +1108,15 @@ export default function HomePage() {
     : step === 'listening'
       ? listeningPart(question)
       : (bagianStructure || question.part || title)
-  const options = buildShuffledOptions(pesertaId || 0, question.id, [
+  const originalOptions: Array<{ answerKey: OptionKey; text: string }> = [
     { answerKey: 'A', text: question.pilihan_a },
     { answerKey: 'B', text: question.pilihan_b },
     { answerKey: 'C', text: question.pilihan_c },
     { answerKey: 'D', text: question.pilihan_d },
-  ])
+  ]
+  const options = step === 'structure'
+    ? originalOptions.map((option) => ({ ...option, displayKey: option.answerKey }))
+    : buildShuffledOptions(pesertaId || 0, question.id, originalOptions)
   const writtenExpressionOptions: Array<[OptionKey, string]> = options.map(({ displayKey, text }) => [displayKey, text])
 
   const selectAnswer = (answer: string) => {
@@ -1259,7 +1262,7 @@ export default function HomePage() {
       {audioError && <p role="alert" style={errorNotice}>{audioError}</p>}
       {!listeningDirection && !listeningGroup && <div style={isReading ? readingLayout : undefined}>
         {isReading && <div style={box}><h4>{question.passage_title}</h4><ReadingPassage title={question.passage_title} text={question.passage_text} /></div>}
-        <div>
+        <div style={isReading ? readingQuestionPanel : undefined}>
           {bagianStructure && (
             <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 8, background: '#ede9fe', color: '#5b21b6', fontWeight: 'bold' }}>
               {bagianStructure}
@@ -1336,7 +1339,8 @@ const box: CSSProperties = { padding: 15, borderRadius: 8, background: '#faf5ff'
 const directionCard: CSSProperties = { padding: 24, border: '1px solid #ddd6fe', borderRadius: 14, background: '#faf5ff', boxShadow: '0 8px 20px -14px rgba(76,29,149,.55)' }
 const directionBadge: CSSProperties = { display: 'inline-block', padding: '6px 14px', borderRadius: 999, background: '#7c3aed', color: '#fff', fontWeight: 800, letterSpacing: 1 }
 const directionText: CSSProperties = { maxHeight: 430, overflowY: 'auto', padding: 18, borderRadius: 10, background: '#fff', border: '1px solid #ede9fe', whiteSpace: 'pre-line', lineHeight: 1.75, color: '#1f2937' }
-const readingLayout: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }
+const readingLayout: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 20 }
+const readingQuestionPanel: CSSProperties = { padding: 18, border: '1px solid #ddd6fe', borderRadius: 10, background: '#fff' }
 const optionList: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10, margin: '20px 0' }
 const navigation: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 10 }
 const optionButton = (active: boolean): CSSProperties => ({ padding: 12, textAlign: 'left', borderRadius: 8, border: active ? '2px solid #7c3aed' : '1px solid #ddd6fe', background: active ? '#f3e8ff' : '#fff', color: '#111827', cursor: 'pointer' })

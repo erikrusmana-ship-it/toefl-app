@@ -1284,9 +1284,6 @@ export default function HomePage() {
               ({displayKey}) {text}
             </button>
           ))}</div>
-          <p style={{ margin: '10px 0 0', color: '#6b7280', fontSize: 12 }}>
-            Urutan pilihan jawaban diacak khusus untuk setiap peserta.
-          </p>
         </div>
       </div>}
       {!listeningDirection && !listeningGroup && step === 'listening' && !answers[question.id] && (

@@ -12,10 +12,17 @@ type Participant = {
   npm: string | null
   prodi: string | null
   email: string
+  raw_listening: number | null
+  scaled_listening: number | null
+  raw_structure: number | null
+  scaled_structure: number | null
+  raw_reading: number | null
+  scaled_reading: number | null
   skor_akhir: number | null
   cefr_level: string | null
   status_tes: string
   pelanggaran_count: number
+  pelanggaran_detail: ViolationDetail[] | null
   created_at: string
   submitted_at: string | null
   test_started_at: string
@@ -24,6 +31,13 @@ type Participant = {
   current_question: number
   section_deadline: string
   package_code: string
+}
+
+type ViolationDetail = {
+  type?: string
+  label?: string
+  occurredAt?: string
+  section?: string
 }
 
 type AccessCode = {
@@ -38,6 +52,12 @@ type AccessCode = {
 
 type QuestionSection = { section: string; package_code: string }
 
+type ResultBreakdown = {
+  correct: number | '—'
+  incorrect: number | '—'
+  scaled: number | '—'
+}
+
 function packageLabel(code: string) {
   return code === 'model_a' ? 'Model A' : code === 'model_b' ? 'Paket B' : code
 }
@@ -49,6 +69,52 @@ function formatDate(value: string | null) {
     timeStyle: 'short',
     timeZone: 'Asia/Jakarta',
   }).format(new Date(value))
+}
+
+function testDateKey(value: string) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: 'Asia/Jakarta',
+  }).formatToParts(new Date(value))
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value || ''
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+
+function formatTestDate(value: string) {
+  return new Intl.DateTimeFormat('id-ID', {
+    dateStyle: 'full',
+    timeZone: 'Asia/Jakarta',
+  }).format(new Date(value))
+}
+
+function normalizedSection(section: string) {
+  const normalized = section.trim().toLowerCase()
+  if (normalized.includes('listen')) return 'listening'
+  if (normalized.includes('struct')) return 'structure'
+  if (normalized.includes('read')) return 'reading'
+  return normalized
+}
+
+function resultBreakdown(participant: Participant, raw: number | null, scaled: number | null, total: number): ResultBreakdown {
+  if (participant.skor_akhir === null || raw === null || scaled === null) {
+    return { correct: '—', incorrect: '—', scaled: '—' }
+  }
+
+  return {
+    correct: raw,
+    incorrect: Math.max(0, total - raw),
+    scaled,
+  }
+}
+
+function violationLabel(violation: ViolationDetail) {
+  if (violation.label?.trim()) return violation.label.trim()
+  if (violation.type === 'TAB_HIDDEN') return 'Membuka tab lain atau meminimalkan browser'
+  if (violation.type === 'WINDOW_BLUR') return 'Membuka jendela atau aplikasi lain'
+  if (violation.type === 'FULLSCREEN_EXIT') return 'Keluar dari mode fullscreen'
+  return 'Pelanggaran tidak dikenal'
 }
 
 function monitoringStatus(participant: Participant, now: number) {
@@ -78,7 +144,7 @@ export default async function AdminPage() {
   const [participantsResult, accessCodesResult, questionsResult, timeResult] = await Promise.all([
     supabase
       .from('peserta')
-      .select('id,nama,npm,prodi,email,skor_akhir,cefr_level,status_tes,pelanggaran_count,created_at,submitted_at,test_started_at,last_activity_at,current_section,current_question,section_deadline,package_code')
+      .select('id,nama,npm,prodi,email,raw_listening,scaled_listening,raw_structure,scaled_structure,raw_reading,scaled_reading,skor_akhir,cefr_level,status_tes,pelanggaran_count,pelanggaran_detail,created_at,submitted_at,test_started_at,last_activity_at,current_section,current_question,section_deadline,package_code')
       .order('created_at', { ascending: false })
       .limit(250),
     supabase
@@ -101,13 +167,26 @@ export default async function AdminPage() {
   const interrupted = participants.filter((participant) => ['disconnected', 'expired'].includes(statuses.get(participant.id)?.key || '')).length
   const violations = participants.filter((participant) => participant.pelanggaran_count > 0).length
   const activeCodes = accessCodes.filter((code) => code.is_active).length
+  const questionTotals = questions.reduce<Record<string, number>>((result, question) => {
+    const key = `${question.package_code}:${normalizedSection(question.section)}`
+    result[key] = (result[key] || 0) + 1
+    return result
+  }, {})
   const sectionCounts = questions.reduce<Record<string, number>>((result, question) => {
-    const section = question.section.trim().toLowerCase()
-    const sectionName = section.includes('listen') ? 'Listening' : section.includes('struct') ? 'Structure' : section.includes('read') ? 'Reading' : question.section
+    const section = normalizedSection(question.section)
+    const sectionName = section === 'listening' ? 'Listening' : section === 'structure' ? 'Structure' : section === 'reading' ? 'Reading' : question.section
     const key = `${packageLabel(question.package_code)} · ${sectionName}`
     result[key] = (result[key] || 0) + 1
     return result
   }, {})
+  const participantGroups = Array.from(participants.reduce<Map<string, { date: string; participants: Participant[] }>>((groups, participant) => {
+    const date = participant.test_started_at || participant.created_at
+    const key = testDateKey(date)
+    const group = groups.get(key) || { date, participants: [] }
+    group.participants.push(participant)
+    groups.set(key, group)
+    return groups
+  }, new Map()))
 
   return (
     <main className="min-h-screen bg-violet-50 px-4 py-8 text-slate-800">
@@ -148,30 +227,74 @@ export default async function AdminPage() {
           ))}
         </section>
 
-        <section className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-violet-100">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div><h2 className="text-xl font-bold text-violet-950">Pemantauan peserta</h2><p className="text-sm text-slate-500">Status diperbarui otomatis setiap 30 detik. Menampilkan maksimal 250 peserta terbaru.</p></div>
+        <section className="space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-violet-100">
+            <div><h2 className="text-xl font-bold text-violet-950">Pemantauan peserta per tanggal tes</h2><p className="text-sm text-slate-500">Status diperbarui otomatis setiap 30 detik. Menampilkan maksimal 250 peserta terbaru.</p></div>
             <AutoRefresh />
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1280px] border-collapse text-sm">
-              <thead><tr className="bg-violet-100 text-left text-violet-950">{['Nama','NPM','Prodi','Email','Posisi','Status','Aktivitas terakhir','Skor','CEFR','Pelanggaran','Mulai','Selesai'].map((label) => <th key={label} className="px-3 py-3">{label}</th>)}</tr></thead>
-              <tbody>
-                {participants.map((participant) => {
-                  const status = statuses.get(participant.id)!
-                  return <tr key={participant.id} className="border-b border-slate-100 align-top">
-                    <td className="px-3 py-3 font-semibold">{participant.nama}</td><td className="px-3 py-3">{participant.npm || '—'}</td><td className="px-3 py-3">{participant.prodi || '—'}</td><td className="px-3 py-3">{participant.email}</td>
-                    <td className="px-3 py-3"><strong>{sectionLabel(participant.current_section)}</strong><br /><span className="text-xs text-slate-500">{packageLabel(participant.package_code)} · Soal {participant.current_question}</span></td>
-                    <td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-xs font-bold ${status.className}`}>{status.label}</span></td>
-                    <td className="px-3 py-3">{formatDate(participant.last_activity_at)}</td>
-                    <td className="px-3 py-3 font-bold text-violet-900">{participant.skor_akhir ?? '—'}</td><td className="px-3 py-3">{participant.cefr_level || '—'}</td>
-                    <td className={`px-3 py-3 font-semibold ${participant.pelanggaran_count ? 'text-red-700' : 'text-emerald-700'}`}>{participant.pelanggaran_count}</td><td className="px-3 py-3">{formatDate(participant.test_started_at || participant.created_at)}</td><td className="px-3 py-3">{formatDate(participant.submitted_at)}</td>
-                  </tr>
-                })}
-                {!participants.length && <tr><td colSpan={12} className="px-3 py-8 text-center text-slate-500">Belum ada data peserta.</td></tr>}
-              </tbody>
-            </table>
-          </div>
+
+          {participantGroups.map(([dateKey, group]) => (
+            <div key={dateKey} className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-violet-100">
+              <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-violet-600">Tanggal tes</p>
+                  <h3 className="text-xl font-bold text-violet-950">{formatTestDate(group.date)}</h3>
+                </div>
+                <p className="text-sm font-semibold text-slate-500">{group.participants.length} peserta</p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[2450px] border-collapse text-sm">
+                  <thead className="text-violet-950">
+                    <tr className="bg-violet-100 text-left">
+                      {['Nama','NPM','Prodi','Email','Paket / Posisi','Status','Aktivitas terakhir'].map((label) => <th key={label} rowSpan={2} className="px-3 py-3 align-middle">{label}</th>)}
+                      <th colSpan={3} className="border-l border-violet-200 px-3 py-3 text-center">Listening</th>
+                      <th colSpan={3} className="border-l border-violet-200 px-3 py-3 text-center">Structure &amp; Written Expression</th>
+                      <th colSpan={3} className="border-l border-violet-200 px-3 py-3 text-center">Reading</th>
+                      {['Skor akhir','CEFR Level','Pelanggaran','Mulai','Selesai'].map((label) => <th key={label} rowSpan={2} className="px-3 py-3 align-middle">{label}</th>)}
+                    </tr>
+                    <tr className="bg-violet-50 text-center text-xs">
+                      {['L-benar','L-salah','L-konversi','S-benar','S-salah','S-konversi','R-benar','R-salah','R-konversi'].map((key, index) => (
+                        <th key={key} className={`px-3 py-2 ${index % 3 === 0 ? 'border-l border-violet-200' : ''}`}>{key.slice(2).replace('konversi', 'Konversi').replace('benar', 'Benar').replace('salah', 'Salah')}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {group.participants.map((participant) => {
+                      const status = statuses.get(participant.id)!
+                      const listening = resultBreakdown(participant, participant.raw_listening, participant.scaled_listening, questionTotals[`${participant.package_code}:listening`] || 50)
+                      const structure = resultBreakdown(participant, participant.raw_structure, participant.scaled_structure, questionTotals[`${participant.package_code}:structure`] || 40)
+                      const reading = resultBreakdown(participant, participant.raw_reading, participant.scaled_reading, questionTotals[`${participant.package_code}:reading`] || 50)
+                      return <tr key={participant.id} className="border-b border-slate-100 align-top">
+                        <td className="px-3 py-3 font-semibold">{participant.nama}</td><td className="px-3 py-3">{participant.npm || '—'}</td><td className="px-3 py-3">{participant.prodi || '—'}</td><td className="px-3 py-3">{participant.email}</td>
+                        <td className="px-3 py-3"><strong>{packageLabel(participant.package_code)}</strong><br /><span className="text-xs text-slate-500">{sectionLabel(participant.current_section)} · Soal {participant.current_question}</span></td>
+                        <td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-xs font-bold ${status.className}`}>{status.label}</span></td>
+                        <td className="px-3 py-3">{formatDate(participant.last_activity_at)}</td>
+                        {[listening, structure, reading].flatMap((result, sectionIndex) => [
+                          <td key={`${sectionIndex}-correct`} className="border-l border-violet-100 px-3 py-3 text-center font-semibold text-emerald-700">{result.correct}</td>,
+                          <td key={`${sectionIndex}-incorrect`} className="px-3 py-3 text-center font-semibold text-red-700">{result.incorrect}</td>,
+                          <td key={`${sectionIndex}-scaled`} className="px-3 py-3 text-center font-bold text-violet-900">{result.scaled}</td>,
+                        ])}
+                        <td className="px-3 py-3 text-center font-bold text-violet-900">{participant.skor_akhir ?? '—'}</td><td className="px-3 py-3 text-center font-semibold">{participant.cefr_level || '—'}</td>
+                        <td className={`min-w-[250px] px-3 py-3 font-semibold ${participant.pelanggaran_count ? 'text-red-700' : 'text-emerald-700'}`}>
+                          {Array.isArray(participant.pelanggaran_detail) && participant.pelanggaran_detail.length > 0 ? (
+                            <ol className="space-y-1.5">
+                              {participant.pelanggaran_detail.map((violation, violationIndex) => (
+                                <li key={`${violation.occurredAt || 'violation'}-${violationIndex}`}>
+                                  Pelanggaran {violationIndex + 1}: {violationLabel(violation)}
+                                </li>
+                              ))}
+                            </ol>
+                          ) : participant.pelanggaran_count > 0 ? `${participant.pelanggaran_count} pelanggaran (rincian tidak tersedia)` : 'Tidak ada'}
+                        </td><td className="px-3 py-3">{formatDate(participant.test_started_at || participant.created_at)}</td><td className="px-3 py-3">{formatDate(participant.submitted_at)}</td>
+                      </tr>
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+
+          {!participants.length && <div className="rounded-2xl bg-white px-5 py-10 text-center text-slate-500 shadow-sm ring-1 ring-violet-100">Belum ada data peserta.</div>}
         </section>
 
         <section className="grid gap-6 lg:grid-cols-[1fr_2fr]">

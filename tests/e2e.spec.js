@@ -65,6 +65,17 @@ test('Home, admin login, and password recovery pages render', async ({ page }) =
   await expect(page.getByLabel('Email admin')).toBeVisible();
 });
 
+test('Access form stays disabled until React hydration is available', async ({ browser }) => {
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  const page = await context.newPage();
+
+  await page.goto('http://localhost:3000', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByLabel('Kode Akses')).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Menyiapkan aplikasi...' })).toBeDisabled();
+
+  await context.close();
+});
+
 test('Public session APIs reject mutations without a valid participant session', async ({ request }) => {
   const session = await request.get('http://localhost:3000/api/test-session');
   expect(session.status()).toBe(200);

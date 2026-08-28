@@ -1,7 +1,7 @@
 'use client'
 /* eslint-disable @next/next/no-img-element */
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import { fetchWithRetry } from '@/lib/client-network'
 import type { OptionKey } from '@/lib/option-shuffle'
 
@@ -24,6 +24,10 @@ type ProgressData = {
   heardListeningDirections: ListeningPart[]
   heardListeningGroups: number[]
 }
+
+const subscribeToHydration = () => () => undefined
+const getClientHydrationSnapshot = () => true
+const getServerHydrationSnapshot = () => false
 
 function normalizeAnswers(value: unknown): Answers {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
@@ -554,6 +558,11 @@ async function fetchQuestionBank() {
 }
 
 export default function HomePage() {
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    getClientHydrationSnapshot,
+    getServerHydrationSnapshot
+  )
   const [accessCode, setAccessCode] = useState('')
   const [nama, setNama] = useState('')
   const [npm, setNpm] = useState('')
@@ -616,6 +625,7 @@ export default function HomePage() {
 
   const verifyAccessCode = async (event: FormEvent) => {
     event.preventDefault()
+    if (!hydrated) return
     const normalizedCode = accessCode.trim().toUpperCase()
     if (!normalizedCode) return
 
@@ -1128,6 +1138,7 @@ export default function HomePage() {
                 Kode Akses
                 <input
                   required
+                  disabled={!hydrated || loading}
                   autoCapitalize="characters"
                   autoComplete="off"
                   spellCheck={false}
@@ -1137,8 +1148,8 @@ export default function HomePage() {
                   style={{ ...input, textAlign: 'center', letterSpacing: 1.2, fontWeight: 700 }}
                 />
               </label>
-              <button type="submit" disabled={loading} style={purpleButton(loading)}>
-                {loading ? 'Memeriksa kode...' : 'Lanjutkan'}
+              <button type="submit" disabled={!hydrated || loading} style={purpleButton(!hydrated || loading)}>
+                {!hydrated ? 'Menyiapkan aplikasi...' : loading ? 'Memeriksa kode...' : 'Lanjutkan'}
               </button>
             </form>
           </div>

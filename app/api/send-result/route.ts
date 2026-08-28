@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
 import { readTestSession } from '@/lib/test-session-cookie'
+import { createSupabaseAdminClient } from '@/lib/supabase-admin'
 
 const RESULT_RECIPIENT = 'erik.rusmana@unpas.ac.id'
 
@@ -80,7 +80,10 @@ function isValidPayload(payload: Partial<ResultPayload>): payload is ResultPaylo
 
 export async function POST(request: Request) {
   const apiKey = process.env.RESEND_API_KEY
-  if (!apiKey) return NextResponse.json({ error: 'Email service is not configured.' }, { status: 503 })
+  if (!apiKey) {
+    console.error('RESEND_API_KEY belum dikonfigurasi.')
+    return NextResponse.json({ error: 'Email service is not configured.' }, { status: 503 })
+  }
 
   let requestPayload: Partial<EmailRequest> = {}
   try {
@@ -102,11 +105,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid result data.' }, { status: 400 })
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  )
+  const supabase = createSupabaseAdminClient()
   const markEmailDelivery = async (participantId: number, status: 'sending' | 'sent' | 'failed', errorMessage: string | null = null) => {
     try {
       await supabase.rpc('mark_result_email_delivery', {
@@ -161,7 +160,7 @@ export async function POST(request: Request) {
       'Idempotency-Key': `toefl-result-${participantId}`,
     },
     body: JSON.stringify({
-      from: 'TOEFL UNPAS <onboarding@resend.dev>',
+      from: process.env.RESULT_EMAIL_FROM || 'TOEFL UNPAS <onboarding@resend.dev>',
       to: [RESULT_RECIPIENT],
       reply_to: email,
       subject: `${statusTes === 'dihentikan_pelanggaran' ? '[PELANGGARAN] ' : ''}Hasil English Proficiency Test — ${nama} (${npm})`,

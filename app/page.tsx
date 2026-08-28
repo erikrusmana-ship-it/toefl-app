@@ -2,14 +2,8 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
-import { createClient } from '@supabase/supabase-js'
 import { fetchWithRetry } from '@/lib/client-network'
-import { buildShuffledOptions, type OptionKey } from '@/lib/option-shuffle'
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+import type { OptionKey } from '@/lib/option-shuffle'
 
 type Step = 'access' | 'biodata' | 'listening' | 'structure' | 'reading' | 'selesai'
 type Answers = Record<number, string>
@@ -21,12 +15,14 @@ type AntiCheatViolation = { type: ViolationType; label: string; occurredAt: stri
 type ActiveStep = Exclude<Step, 'access' | 'biodata' | 'selesai'>
 type SaveState = 'idle' | 'saving' | 'saved' | 'pending'
 type ProgressData = {
-  version: 2
+  version: 3
   answersListening: Answers
   answersStructure: Answers
   answersReading: Answers
   violationCount: number
   violations: AntiCheatViolation[]
+  heardListeningDirections: ListeningPart[]
+  heardListeningGroups: number[]
 }
 
 function normalizeAnswers(value: unknown): Answers {
@@ -37,6 +33,20 @@ function normalizeAnswers(value: unknown): Answers {
     if (Number.isInteger(id) && id > 0 && typeof answer === 'string' && ['A', 'B', 'C', 'D', 'X'].includes(answer)) result[id] = answer
   }
   return result
+}
+
+function normalizeListeningDirections(value: unknown): ListeningPart[] {
+  if (!Array.isArray(value)) return []
+  return Array.from(new Set(value.filter((item): item is ListeningPart => (
+    item === 'PART A' || item === 'PART B' || item === 'PART C'
+  ))))
+}
+
+function normalizeListeningGroups(value: unknown): number[] {
+  if (!Array.isArray(value)) return []
+  return Array.from(new Set(value
+    .map(Number)
+    .filter((item) => Number.isSafeInteger(item) && Boolean(LISTENING_GROUPS[item]))))
 }
 
 function friendlyError(error: unknown, fallback: string) {
@@ -165,7 +175,21 @@ const LISTENING_GROUPS: Record<number, ListeningGroup> = {
 }
 
 function packageAudioPath(path: string, packageCode: PackageCode) {
-  return packageCode === 'model_a' ? path.replace('/audio/listening/', '/audio/model-a/listening/') : path
+  const folder = packageCode === 'model_a' ? 'model-a' : 'model-b'
+  return path.replace('/audio/listening/', `/audio/${folder}/listening/`)
+}
+
+function audioSources(path: string, packageCode: PackageCode, preferred?: string) {
+  return Array.from(new Set([
+    preferred,
+    packageAudioPath(path, packageCode),
+    path,
+  ].filter((source): source is string => Boolean(source?.trim()))))
+}
+
+function listeningDirectionText(part: ListeningPart, packageCode: PackageCode) {
+  const packageLetter = packageCode === 'model_a' ? 'A' : 'B'
+  return LISTENING_DIRECTIONS[part].text.replaceAll('Practice Test A', `Practice Test ${packageLetter}`)
 }
 
 const READING_PASSAGE_LINES: Record<string, string[]> = {
@@ -370,20 +394,73 @@ function Timer({ deadline, onTimeUp }: { deadline: string; onTimeUp: () => void 
   )
 }
 
+function ReliableAudio({
+  sources,
+  label,
+  onEnded,
+  onReady,
+  onAllSourcesFailed,
+}: {
+  sources: string[]
+  label: string
+  onEnded: () => void
+  onReady?: () => void
+  onAllSourcesFailed: () => void
+}) {
+  const [sourceIndex, setSourceIndex] = useState(0)
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const source = sources[sourceIndex]
+
+  useEffect(() => {
+    audioRef.current?.setAttribute('disableremoteplayback', '')
+  }, [source])
+
+  const handleError = () => {
+    if (sourceIndex < sources.length - 1) {
+      setSourceIndex((current) => current + 1)
+      return
+    }
+
+    onAllSourcesFailed()
+  }
+
+  return (
+    <audio
+      ref={audioRef}
+      key={`${sourceIndex}:${source}`}
+      aria-label={label}
+      controls
+      controlsList="nodownload noplaybackrate noremoteplayback"
+      autoPlay
+      preload="auto"
+      onCanPlay={onReady}
+      onEnded={onEnded}
+      onError={handleError}
+      onContextMenu={(event) => event.preventDefault()}
+      src={source}
+      style={{ width: '100%', margin: '12px 0' }}
+    />
+  )
+}
+
 function WrittenExpressionQuestion({ text, options }: { text: string; options: Array<[string, string]> }) {
   const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const matches: Array<{ start: number; end: number; label: string }> = []
+  let searchCursor = 0
 
   for (const [label, option] of options) {
     const phrase = option.trim()
     if (!phrase) continue
 
     const expression = new RegExp(`\\b${escapeRegExp(phrase)}\\b`, 'gi')
-    let found: RegExpExecArray | null
+    expression.lastIndex = searchCursor
+    const found = expression.exec(text)
 
-    while ((found = expression.exec(text)) !== null) {
-      matches.push({ start: found.index, end: found.index + found[0].length, label })
-    }
+    if (!found) continue
+
+    const end = found.index + found[0].length
+    matches.push({ start: found.index, end, label })
+    searchCursor = end
   }
 
   matches.sort((a, b) => a.start - b.start || b.end - a.end)
@@ -445,47 +522,34 @@ function ReadingPassage({ title, text }: { title?: string; text?: string }) {
   )
 }
 
-// Section pada database boleh berupa "Listening", "Listening Comprehension",
-// "Structure & Written Expression", atau "Reading Comprehension".
-function pilihSoalTes(data: SoalItem[], kataKunci: string, maksimum: number): SoalItem[] {
-  const kandidat = data
-    .filter((soal) => soal.section?.trim().toLowerCase().includes(kataKunci))
-    .sort((a, b) => a.nomor_soal - b.nomor_soal || a.id - b.id)
+async function fetchQuestionBank() {
+  const response = await fetch('/api/questions', {
+    cache: 'no-store',
+  })
+  const payload = await response.json().catch(() => null)
 
-  // Abaikan soal dengan konten yang sama persis. Ini mencegah data impor yang
-  // berulang (misalnya audio no-1.mp3 dipakai lagi pada nomor 11, 21, dst.).
-  const unik = new Map<string, SoalItem>()
-  for (const soal of kandidat) {
-    const identitasSoal = [
-      soal.audio_url,
-      soal.passage_title,
-      soal.passage_text,
-      soal.pertanyaan,
-      soal.pilihan_a,
-      soal.pilihan_b,
-      soal.pilihan_c,
-      soal.pilihan_d,
-    ].map((nilai) => nilai || '').join('|')
-
-    if (!unik.has(identitasSoal)) unik.set(identitasSoal, soal)
+  if (!response.ok) {
+    throw new Error(payload?.error || 'Bank soal belum dapat dimuat.')
   }
 
-  return Array.from(unik.values()).slice(0, maksimum)
-}
+  const questions = payload?.questions
+  if (
+    !questions ||
+    !Array.isArray(questions.listening) ||
+    !Array.isArray(questions.structure) ||
+    !Array.isArray(questions.reading) ||
+    questions.listening.length !== 50 ||
+    questions.structure.length !== 40 ||
+    questions.reading.length !== 50
+  ) {
+    throw new Error('Bank soal paket peserta belum lengkap.')
+  }
 
-async function fetchQuestionBank(packageCode: PackageCode) {
-  const { data, error } = await supabase
-    .from('soal')
-    .select('id,package_code,section,nomor_soal,part,audio_url,passage_title,passage_text,pertanyaan,pilihan_a,pilihan_b,pilihan_c,pilihan_d')
-    .eq('package_code', packageCode)
-    .order('id', { ascending: true })
-
-  if (error) throw error
-  const all = (data || []) as SoalItem[]
   return {
-    listening: pilihSoalTes(all, 'listen', 50),
-    structure: pilihSoalTes(all, 'struct', 40),
-    reading: pilihSoalTes(all, 'read', 50),
+    packageCode: payload.package_code as PackageCode,
+    listening: questions.listening as SoalItem[],
+    structure: questions.structure as SoalItem[],
+    reading: questions.reading as SoalItem[],
   }
 }
 
@@ -517,6 +581,9 @@ export default function HomePage() {
   const [listeningDirection, setListeningDirection] = useState<ListeningPart | null>(null)
   const [listeningGroup, setListeningGroup] = useState<ListeningGroup | null>(null)
   const [directionAudioFinished, setDirectionAudioFinished] = useState(false)
+  const [heardListeningDirections, setHeardListeningDirections] = useState<ListeningPart[]>([])
+  const [heardListeningGroups, setHeardListeningGroups] = useState<number[]>([])
+  const [audioRetryToken, setAudioRetryToken] = useState(0)
   const [audioError, setAudioError] = useState('')
   const [navigating, setNavigating] = useState(false)
   const [antiCheatWarning, setAntiCheatWarning] = useState<AntiCheatViolation | null>(null)
@@ -553,14 +620,23 @@ export default function HomePage() {
     if (!normalizedCode) return
 
     setLoading(true)
-    const { data, error } = await supabase.rpc('get_access_code_test_package', { p_code: normalizedCode })
-    setLoading(false)
-
-    if (error) {
-      alert(`Gagal memeriksa kode akses: ${error.message}`)
+    let packageInfo: { valid?: boolean; package_code?: string; package_name?: string } | null = null
+    try {
+      const response = await fetch('/api/test-access', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'verify', code: normalizedCode }),
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(data?.error || 'Kode akses belum dapat diperiksa.')
+      packageInfo = data
+    } catch (error) {
+      alert(friendlyError(error, error instanceof Error ? error.message : 'Kode akses belum dapat diperiksa.'))
       return
+    } finally {
+      setLoading(false)
     }
-    const packageInfo = data as { valid?: boolean; package_code?: string; package_name?: string } | null
+
     if (!packageInfo?.valid || !['model_a', 'model_b'].includes(String(packageInfo.package_code))) {
       alert('Kode akses tidak valid atau sudah dinonaktifkan.')
       return
@@ -569,25 +645,9 @@ export default function HomePage() {
     setAccessCode(normalizedCode)
     setPackageCode(packageInfo.package_code as PackageCode)
     setPackageName(packageInfo.package_name || 'Paket Tes')
+    setIsFetching(false)
     setStep('biodata')
   }
-
-  useEffect(() => {
-    if (step !== 'biodata') return
-
-    const load = async () => {
-      try {
-        const bank = await fetchQuestionBank(packageCode)
-        setListening(bank.listening)
-        setStructure(bank.structure)
-        setReading(bank.reading)
-      } catch (error) {
-        setPageMessage(friendlyError(error, 'Bank soal belum dapat dimuat. Muat ulang halaman atau hubungi administrator.'))
-      }
-      setIsFetching(false)
-    }
-    void load()
-  }, [step, packageCode])
 
   const resumePreviousTest = async () => {
     setLoading(true)
@@ -606,7 +666,11 @@ export default function HomePage() {
       const restoredPackageCode = ['model_a', 'model_b'].includes(String(sessionData.progress?.package_code))
         ? sessionData.progress.package_code as PackageCode
         : 'model_b'
-      const bank = await fetchQuestionBank(restoredPackageCode)
+      const bank = await fetchQuestionBank()
+
+      if (bank.packageCode !== restoredPackageCode) {
+        throw new Error('Paket soal pada sesi tidak konsisten.')
+      }
 
       await document.documentElement.requestFullscreen({ navigationUI: 'hide' })
 
@@ -626,6 +690,21 @@ export default function HomePage() {
       const storedViolations = Array.isArray(storedProgress.violations)
         ? storedProgress.violations.filter((item): item is AntiCheatViolation => Boolean(item && typeof item === 'object' && 'type' in item && 'occurredAt' in item)).slice(0, 10)
         : []
+      const storedDirections = normalizeListeningDirections(storedProgress.heardListeningDirections)
+      const storedGroups = normalizeListeningGroups(storedProgress.heardListeningGroups)
+      const restoredQuestion = activeStep === 'listening' ? bank.listening[restoredIndex] : null
+      const restoredPart = restoredQuestion ? listeningPart(restoredQuestion) : null
+      const shouldReplayDirection = Boolean(
+        restoredQuestion &&
+        [1, 31, 38].includes(restoredQuestion.nomor_soal) &&
+        restoredPart &&
+        !storedDirections.includes(restoredPart)
+      )
+      const restoredGroup = restoredQuestion ? LISTENING_GROUPS[restoredQuestion.nomor_soal] : undefined
+      const shouldReplayGroup = Boolean(
+        restoredGroup &&
+        !storedGroups.includes(restoredGroup.firstQuestion)
+      )
 
       setListening(bank.listening)
       setStructure(bank.structure)
@@ -635,10 +714,15 @@ export default function HomePage() {
       setAnswersListening(normalizeAnswers(storedProgress.answersListening))
       setAnswersStructure(normalizeAnswers(storedProgress.answersStructure))
       setAnswersReading(normalizeAnswers(storedProgress.answersReading))
+      setHeardListeningDirections(storedDirections)
+      setHeardListeningGroups(storedGroups)
       setPesertaId(Number(sessionData.participantId))
       setIndex(restoredIndex)
-      setListeningDirection(null)
-      setListeningGroup(null)
+      setDirectionAudioFinished(false)
+      setListeningDirection(shouldReplayDirection ? restoredPart : null)
+      setListeningGroup(shouldReplayGroup && restoredGroup
+        ? restoredGroup
+        : null)
       setSectionDeadline(serverProgress.section_deadline || new Date(Date.now() + 40 * 60 * 1000).toISOString())
       progressRevisionRef.current = Math.max(0, Number(serverProgress.progress_revision) || 0)
       violationsRef.current = storedViolations
@@ -701,11 +785,6 @@ export default function HomePage() {
     setProdi(participantProdi)
     setEmail(participantEmail)
 
-    if (!listening.length || !structure.length) {
-      alert('Soal Listening atau Structure belum tersedia. Cek kolom section pada tabel soal.')
-      return
-    }
-
     if (!isGoogleChrome()) {
       alert('Tes hanya dapat dimulai menggunakan Google Chrome. Silakan buka kembali halaman ini di Google Chrome.')
       return
@@ -730,39 +809,59 @@ export default function HomePage() {
     setAntiCheatWarning(null)
 
     setLoading(true)
-    const { data, error } = await supabase.rpc('create_participant_with_access_code_v2', {
-      p_code: accessCode,
-      p_nama: participantNama,
-      p_npm: participantNpm,
-      p_prodi: participantProdi,
-      p_email: participantEmail,
-    })
-    if (error) {
+    let participant: { participant_id?: number; section_deadline?: string; package_code?: string; package_name?: string } | null = null
+    let bank: Awaited<ReturnType<typeof fetchQuestionBank>> | null = null
+    try {
+      const response = await fetch('/api/test-access', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'start',
+          code: accessCode,
+          nama: participantNama,
+          npm: participantNpm,
+          prodi: participantProdi,
+          email: participantEmail,
+        }),
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(data?.error || 'Tes belum dapat dimulai.')
+      participant = data
+
+      if (
+        !participant?.participant_id ||
+        !['model_a', 'model_b'].includes(String(participant.package_code))
+      ) {
+        throw new Error('Sesi peserta tidak berhasil dibuat.')
+      }
+
+      bank = await fetchQuestionBank()
+      if (bank.packageCode !== participant.package_code) {
+        throw new Error('Paket soal pada sesi tidak konsisten.')
+      }
+    } catch (error) {
       setLoading(false)
       if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
-      if (error.message.toLowerCase().includes('kode akses')) setStep('access')
-      return alert(`Gagal memulai tes: ${error.message}`)
+      const message = error instanceof Error ? error.message : 'Tes belum dapat dimulai.'
+      if (participant?.participant_id) {
+        setResumeAvailable(true)
+        setStep('access')
+        setPageMessage('Sesi sudah dibuat, tetapi bank soal belum berhasil dimuat. Gunakan tombol Lanjutkan Tes untuk mencoba kembali tanpa membuat peserta baru.')
+        return
+      }
+      if (/kode akses/i.test(message)) setStep('access')
+      return alert(`Gagal memulai tes: ${message}`)
     }
 
-    const participant = data as { participant_id?: number; submission_token?: string; section_deadline?: string; package_code?: string; package_name?: string } | null
-    if (!participant?.participant_id || !participant.submission_token) {
+    if (!participant?.participant_id || !bank) {
       setLoading(false)
       if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
       return alert('Gagal memulai tes: sesi peserta tidak berhasil dibuat.')
     }
 
-    const sessionResponse = await fetch('/api/test-session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ participantId: Number(participant.participant_id), submissionToken: participant.submission_token }),
-    })
-    if (!sessionResponse.ok) {
-      setLoading(false)
-      if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
-      setPageMessage('Sesi aman tidak berhasil dibuat. Periksa koneksi lalu mulai kembali.')
-      return
-    }
-
+    setListening(bank.listening)
+    setStructure(bank.structure)
+    setReading(bank.reading)
     setPesertaId(Number(participant.participant_id))
     if (['model_a', 'model_b'].includes(String(participant.package_code))) setPackageCode(participant.package_code as PackageCode)
     if (participant.package_name) setPackageName(participant.package_name)
@@ -770,6 +869,8 @@ export default function HomePage() {
     setSectionDeadline(participant.section_deadline || new Date(Date.now() + 40 * 60 * 1000).toISOString())
     setIndex(0)
     setDirectionAudioFinished(false)
+    setHeardListeningDirections([])
+    setHeardListeningGroups([])
     setListeningDirection('PART A')
     antiCheatActiveRef.current = true
     setLoading(false)
@@ -834,12 +935,14 @@ export default function HomePage() {
     const sequence = ++saveSequenceRef.current
     const revision = ++progressRevisionRef.current
     const progress: ProgressData = {
-      version: 2,
+      version: 3,
       answersListening,
       answersStructure,
       answersReading,
       violationCount,
       violations: violationsRef.current.slice(0, 10),
+      heardListeningDirections,
+      heardListeningGroups,
     }
 
     // Semua autosave diproses berurutan. Ini mencegah request lama yang lambat
@@ -868,7 +971,7 @@ export default function HomePage() {
     })
     saveQueueRef.current = queuedSave
     return queuedSave
-  }, [pesertaId, step, index, answersListening, answersStructure, answersReading, violationCount])
+  }, [pesertaId, step, index, answersListening, answersStructure, answersReading, violationCount, heardListeningDirections, heardListeningGroups])
 
   useEffect(() => {
     if (!pesertaId || !['listening', 'structure', 'reading'].includes(step)) return
@@ -1114,9 +1217,7 @@ export default function HomePage() {
     { answerKey: 'C', text: question.pilihan_c },
     { answerKey: 'D', text: question.pilihan_d },
   ]
-  const options = step === 'structure'
-    ? originalOptions.map((option) => ({ ...option, displayKey: option.answerKey }))
-    : buildShuffledOptions(pesertaId || 0, question.id, originalOptions)
+  const options = originalOptions.map((option) => ({ ...option, displayKey: option.answerKey }))
   const writtenExpressionOptions: Array<[OptionKey, string]> = options.map(({ displayKey, text }) => [displayKey, text])
 
   const selectAnswer = (answer: string) => {
@@ -1144,7 +1245,7 @@ export default function HomePage() {
       if (step === 'listening') {
         const nextPart = listeningPart(listening[nextIndex])
         const nextGroup = LISTENING_GROUPS[listening[nextIndex].nomor_soal]
-        setListeningGroup(nextGroup ? { ...nextGroup, audio: packageAudioPath(nextGroup.audio, packageCode) } : null)
+        setListeningGroup(nextGroup || null)
         if (nextPart !== listeningPart(question)) {
           setDirectionAudioFinished(false)
           setListeningDirection(nextPart)
@@ -1159,6 +1260,32 @@ export default function HomePage() {
 
   const audioSelesai = () => {
     next()
+  }
+
+  const completeListeningDirection = () => {
+    if (!listeningDirection) return
+    setHeardListeningDirections((current) => (
+      current.includes(listeningDirection) ? current : [...current, listeningDirection]
+    ))
+    setAudioError('')
+    setListeningDirection(null)
+  }
+
+  const completeListeningGroup = () => {
+    if (!listeningGroup) return
+    setHeardListeningGroups((current) => (
+      current.includes(listeningGroup.firstQuestion)
+        ? current
+        : [...current, listeningGroup.firstQuestion]
+    ))
+    setAudioError('')
+    setListeningGroup(null)
+  }
+
+  const retryCurrentAudio = () => {
+    setAudioError('')
+    if (listeningDirection) setDirectionAudioFinished(false)
+    setAudioRetryToken((current) => current + 1)
   }
 
   return (
@@ -1201,22 +1328,27 @@ export default function HomePage() {
             <h2 style={{ margin: '14px 0 6px', color: '#4c1d95' }}>{LISTENING_DIRECTIONS[listeningDirection].title}</h2>
             <p style={{ marginTop: 0, color: '#6b7280' }}>Listen to the directions and read along.</p>
           </div>
-          <audio
-            key={listeningDirection}
-            controls
-            controlsList="nodownload noplaybackrate noremoteplayback"
-            autoPlay
+          <ReliableAudio
+            key={`direction:${packageCode}:${listeningDirection}:${audioRetryToken}`}
+            label={`Directions ${listeningDirection}`}
+            sources={audioSources(LISTENING_DIRECTIONS[listeningDirection].audio, packageCode)}
             onEnded={() => setDirectionAudioFinished(true)}
-            onError={() => setDirectionAudioFinished(true)}
-            onContextMenu={(event) => event.preventDefault()}
-            src={packageAudioPath(LISTENING_DIRECTIONS[listeningDirection].audio, packageCode)}
-            style={{ width: '100%', margin: '12px 0 20px' }}
+            onReady={() => setAudioError('')}
+            onAllSourcesFailed={() => {
+              setDirectionAudioFinished(true)
+              setAudioError('Audio directions belum dapat dimuat. Baca petunjuk di bawah, lalu coba lagi atau lanjutkan dengan pengawasan administrator.')
+            }}
           />
-          <div style={directionText}>{LISTENING_DIRECTIONS[listeningDirection].text}</div>
+          <div style={directionText}>{listeningDirectionText(listeningDirection, packageCode)}</div>
+          {audioError && (
+            <button type="button" onClick={retryCurrentAudio} style={{ ...grayButton(false), width: '100%', marginTop: 12 }}>
+              Coba Muat Ulang Audio
+            </button>
+          )}
           <button
             type="button"
             disabled={!directionAudioFinished}
-            onClick={() => setListeningDirection(null)}
+            onClick={completeListeningDirection}
             style={{ ...purpleButton(!directionAudioFinished), width: '100%', marginTop: 24 }}
           >
             {directionAudioFinished ? `Mulai ${listeningDirection}` : 'Dengarkan audio sampai selesai...'}
@@ -1231,35 +1363,39 @@ export default function HomePage() {
               Dengarkan audio berikut sebelum mengerjakan soal {listeningGroup.firstQuestion}–{listeningGroup.lastQuestion}.
             </p>
           </div>
-          <audio
-            key={listeningGroup.firstQuestion}
-            controls
-            controlsList="nodownload noplaybackrate noremoteplayback"
-            autoPlay
-            onEnded={() => { setAudioError(''); setListeningGroup(null) }}
-            onError={() => setAudioError('Audio percakapan gagal dimuat. Periksa koneksi, lalu muat ulang halaman untuk melanjutkan sesi.')}
-            onContextMenu={(event) => event.preventDefault()}
-            src={listeningGroup.audio}
-            style={{ width: '100%', margin: '12px 0' }}
+          <ReliableAudio
+            key={`group:${packageCode}:${listeningGroup.firstQuestion}:${audioRetryToken}`}
+            label={`Audio soal ${listeningGroup.firstQuestion} sampai ${listeningGroup.lastQuestion}`}
+            sources={audioSources(listeningGroup.audio, packageCode)}
+            onEnded={completeListeningGroup}
+            onReady={() => setAudioError('')}
+            onAllSourcesFailed={() => setAudioError('Semua sumber audio percakapan gagal dimuat. Periksa koneksi lalu klik Coba Muat Ulang Audio.')}
           />
+          {audioError && (
+            <button type="button" onClick={retryCurrentAudio} style={{ ...grayButton(false), width: '100%', marginTop: 12 }}>
+              Coba Muat Ulang Audio
+            </button>
+          )}
           <p style={{ margin: '14px 0 0', textAlign: 'center', color: '#5b21b6', fontWeight: 700 }}>
             Setelah audio selesai, halaman soal {listeningGroup.firstQuestion} akan terbuka otomatis.
           </p>
         </section>
       ) : step === 'listening' && (
-          <audio
-          key={question.id}
-          controls
-          controlsList="nodownload noplaybackrate noremoteplayback"
-          autoPlay
+        <ReliableAudio
+          key={`question:${packageCode}:${question.id}:${audioRetryToken}`}
+          label={`Audio soal Listening nomor ${question.nomor_soal}`}
+          sources={audioSources(`/audio/listening/no-${question.nomor_soal}.mp3`, packageCode, question.audio_url)}
           onEnded={audioSelesai}
-          onError={() => setAudioError('Audio soal gagal dimuat. Anda tetap dapat memilih jawaban atau melewati soal ini.')}
-          onContextMenu={(event) => event.preventDefault()}
-          src={question.audio_url || packageAudioPath(`/audio/listening/no-${question.nomor_soal}.mp3`, packageCode)}
-          style={{ width: '100%', marginBottom: 20 }}
+          onReady={() => setAudioError('')}
+          onAllSourcesFailed={() => setAudioError('Semua sumber audio soal gagal dimuat. Klik Coba Muat Ulang Audio atau minta bantuan pengawas.')}
         />
       )}
       {audioError && <p role="alert" style={errorNotice}>{audioError}</p>}
+      {audioError && step === 'listening' && !listeningDirection && !listeningGroup && (
+        <button type="button" onClick={retryCurrentAudio} style={{ ...grayButton(false), width: '100%', marginBottom: 16 }}>
+          Coba Muat Ulang Audio
+        </button>
+      )}
       {!listeningDirection && !listeningGroup && <div style={isReading ? readingLayout : undefined}>
         {isReading && <div style={box}><h4>{question.passage_title}</h4><ReadingPassage title={question.passage_title} text={question.passage_text} /></div>}
         <div style={isReading ? readingQuestionPanel : undefined}>
@@ -1295,7 +1431,14 @@ export default function HomePage() {
         </p>
       )}
       {!listeningDirection && !listeningGroup && <div style={navigation}>
-        <button type="button" onClick={() => setIndex((old) => Math.max(0, old - 1))} disabled={index === 0} style={grayButton(index === 0)}>Sebelumnya</button>
+        <button
+          type="button"
+          onClick={() => setIndex((old) => Math.max(0, old - 1))}
+          disabled={index === 0 || step === 'listening'}
+          style={grayButton(index === 0 || step === 'listening')}
+        >
+          {step === 'listening' ? 'Tidak dapat kembali' : 'Sebelumnya'}
+        </button>
         <button
           type="button"
           onClick={next}

@@ -65,6 +65,20 @@ test('Home, admin login, and password recovery pages render', async ({ page }) =
   await expect(page.getByLabel('Email admin')).toBeVisible();
 });
 
+test('Every route receives the additional browser security headers', async ({ request }) => {
+  const response = await request.get('http://localhost:3000');
+  const headers = response.headers();
+
+  expect(response.status()).toBe(200);
+  expect(headers['content-security-policy']).toContain("frame-ancestors 'none'");
+  expect(headers['content-security-policy']).toContain("object-src 'none'");
+  expect(headers['x-content-type-options']).toBe('nosniff');
+  expect(headers['x-frame-options']).toBe('DENY');
+  expect(headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
+  expect(headers['permissions-policy']).toContain('camera=()');
+  expect(headers['cross-origin-opener-policy']).toBe('same-origin');
+});
+
 test('Access form stays disabled until React hydration is available', async ({ browser }) => {
   const context = await browser.newContext({ javaScriptEnabled: false });
   const page = await context.newPage();

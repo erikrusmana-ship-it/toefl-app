@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { logoutAdmin, toggleAccessCode } from './actions'
 import AutoRefresh from './auto-refresh'
+import RetryResultEmails from './retry-result-emails'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,6 +32,7 @@ type Participant = {
   current_question: number
   section_deadline: string
   package_code: string
+  email_delivery_status: string
 }
 
 type ViolationDetail = {
@@ -144,7 +146,7 @@ export default async function AdminPage() {
   const [participantsResult, accessCodesResult, questionsResult, timeResult] = await Promise.all([
     supabase
       .from('peserta')
-      .select('id,nama,npm,prodi,email,raw_listening,scaled_listening,raw_structure,scaled_structure,raw_reading,scaled_reading,skor_akhir,cefr_level,status_tes,pelanggaran_count,pelanggaran_detail,created_at,submitted_at,test_started_at,last_activity_at,current_section,current_question,section_deadline,package_code')
+      .select('id,nama,npm,prodi,email,raw_listening,scaled_listening,raw_structure,scaled_structure,raw_reading,scaled_reading,skor_akhir,cefr_level,status_tes,pelanggaran_count,pelanggaran_detail,created_at,submitted_at,test_started_at,last_activity_at,current_section,current_question,section_deadline,package_code,email_delivery_status')
       .order('created_at', { ascending: false })
       .limit(250),
     supabase
@@ -167,6 +169,10 @@ export default async function AdminPage() {
   const interrupted = participants.filter((participant) => ['disconnected', 'expired'].includes(statuses.get(participant.id)?.key || '')).length
   const violations = participants.filter((participant) => participant.pelanggaran_count > 0).length
   const activeCodes = accessCodes.filter((code) => code.is_active).length
+  const pendingResultEmails = participants.filter((participant) => (
+    participant.submitted_at
+    && ['pending', 'failed'].includes(participant.email_delivery_status)
+  )).length
   const questionTotals = questions.reduce<Record<string, number>>((result, question) => {
     const key = `${question.package_code}:${normalizedSection(question.section)}`
     result[key] = (result[key] || 0) + 1
@@ -202,6 +208,7 @@ export default async function AdminPage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            <RetryResultEmails pendingCount={pendingResultEmails} />
             <Link href="/admin/export" className="rounded-lg bg-white px-4 py-2 text-sm font-bold text-violet-900 hover:bg-violet-100">Unduh CSV</Link>
             <form action={logoutAdmin}><button className="rounded-lg border border-violet-300 px-4 py-2 text-sm font-bold hover:bg-violet-900">Keluar</button></form>
           </div>

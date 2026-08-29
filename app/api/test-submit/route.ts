@@ -2,6 +2,7 @@ import { after, NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
+import { normalizeAntiCheatViolations } from '@/lib/anti-cheat'
 
 import {
   decodeTestSession,
@@ -133,30 +134,6 @@ function normalizeAnswers(
   }
 
   return result
-}
-
-function normalizeViolations(
-  value: unknown
-) {
-  if (!Array.isArray(value)) {
-    return null
-  }
-
-  if (value.length > 10) {
-    return null
-  }
-
-  for (const violation of value) {
-    if (
-      !violation ||
-      typeof violation !== 'object' ||
-      Array.isArray(violation)
-    ) {
-      return null
-    }
-  }
-
-  return value
 }
 
 /**
@@ -301,7 +278,7 @@ export async function POST(
      */
 
     const violations =
-      normalizeViolations(
+      normalizeAntiCheatViolations(
         payload.violations
       )
 
@@ -314,6 +291,26 @@ export async function POST(
         400
       )
     }
+
+    if (
+      status === 'dihentikan_pelanggaran' &&
+      violations.length < 2
+    ) {
+      return noStore(
+        {
+          error:
+            'Penghentian tes memerlukan dua pelanggaran yang valid.',
+        },
+        400
+      )
+    }
+
+    // Pelanggaran kedua selalu mengakhiri tes, meskipun payload client
+    // keliru mengirim status "selesai".
+    const effectiveStatus =
+      violations.length >= 2
+        ? 'dihentikan_pelanggaran'
+        : status
 
     /**
      * ========================================
@@ -343,7 +340,7 @@ export async function POST(
           violations,
 
         p_status:
-          status,
+          effectiveStatus,
       }
     )
 

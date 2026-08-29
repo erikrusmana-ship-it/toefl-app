@@ -2,6 +2,13 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent, type ReactNode } from 'react'
+import {
+  classifyViolationIncident,
+  normalizeAntiCheatViolations,
+  VIOLATION_LABELS,
+  type AntiCheatViolation,
+  type ViolationType,
+} from '@/lib/anti-cheat'
 import { fetchWithRetry } from '@/lib/client-network'
 import type { OptionKey } from '@/lib/option-shuffle'
 
@@ -10,8 +17,6 @@ type Answers = Record<number, string>
 type PackageCode = 'model_a' | 'model_b'
 type ListeningPart = 'PART A' | 'PART B' | 'PART C'
 type ListeningGroup = { title: string; audio: string; firstQuestion: number; lastQuestion: number }
-type ViolationType = 'TAB_HIDDEN' | 'WINDOW_BLUR' | 'FULLSCREEN_EXIT'
-type AntiCheatViolation = { type: ViolationType; label: string; occurredAt: string; section: Exclude<Step, 'access' | 'biodata' | 'selesai'> }
 type ActiveStep = Exclude<Step, 'access' | 'biodata' | 'selesai'>
 type SaveState = 'idle' | 'saving' | 'saved' | 'pending'
 type ProgressData = {
@@ -59,12 +64,6 @@ function friendlyError(error: unknown, fallback: string) {
   if (/rate limit|too many/i.test(message)) return 'Terlalu banyak permintaan. Tunggu beberapa menit lalu coba lagi.'
   if (/sesi peserta/i.test(message)) return 'Sesi tes tidak lagi valid. Hubungi administrator untuk bantuan.'
   return fallback
-}
-
-const VIOLATION_LABELS: Record<ViolationType, string> = {
-  TAB_HIDDEN: 'Membuka tab lain atau meminimalkan browser',
-  WINDOW_BLUR: 'Membuka jendela atau aplikasi lain',
-  FULLSCREEN_EXIT: 'Keluar dari mode fullscreen',
 }
 
 function isGoogleChrome(): boolean {
@@ -596,11 +595,16 @@ export default function HomePage() {
   const [audioError, setAudioError] = useState('')
   const [navigating, setNavigating] = useState(false)
   const [antiCheatWarning, setAntiCheatWarning] = useState<AntiCheatViolation | null>(null)
+  const [terminationPending, setTerminationPending] = useState(false)
   const [violationCount, setViolationCount] = useState(0)
   const submitting = useRef(false)
   const violationsRef = useRef<AntiCheatViolation[]>([])
   const antiCheatActiveRef = useRef(false)
+  const antiCheatRecoveryRef = useRef(false)
   const lastViolationAtRef = useRef(0)
+  const pendingViolationSignalsRef = useRef<Set<ViolationType>>(new Set())
+  const violationFlushTimerRef = useRef<number | null>(null)
+  const recoveryGraceTimerRef = useRef<number | null>(null)
   const forcedTerminationRef = useRef(false)
   const submitRef = useRef<() => void>(() => undefined)
   const saveSequenceRef = useRef(0)
@@ -697,9 +701,8 @@ export default function HomePage() {
       const maxQuestions = activeStep === 'listening' ? bank.listening.length : activeStep === 'structure' ? bank.structure.length : bank.reading.length
       const restoredIndex = Math.max(0, Math.min((Number(serverProgress.question) || 1) - 1, Math.max(0, maxQuestions - 1)))
       const storedProgress = serverProgress.progress || {}
-      const storedViolations = Array.isArray(storedProgress.violations)
-        ? storedProgress.violations.filter((item): item is AntiCheatViolation => Boolean(item && typeof item === 'object' && 'type' in item && 'occurredAt' in item)).slice(0, 10)
-        : []
+      const storedViolations = normalizeAntiCheatViolations(storedProgress.violations) || []
+      const shouldTerminate = storedViolations.length >= 2
       const storedDirections = normalizeListeningDirections(storedProgress.heardListeningDirections)
       const storedGroups = normalizeListeningGroups(storedProgress.heardListeningGroups)
       const restoredQuestion = activeStep === 'listening' ? bank.listening[restoredIndex] : null
@@ -737,9 +740,11 @@ export default function HomePage() {
       progressRevisionRef.current = Math.max(0, Number(serverProgress.progress_revision) || 0)
       violationsRef.current = storedViolations
       setViolationCount(storedViolations.length)
-      forcedTerminationRef.current = false
+      forcedTerminationRef.current = shouldTerminate
+      setTerminationPending(shouldTerminate)
       lastViolationAtRef.current = Date.now()
-      antiCheatActiveRef.current = true
+      antiCheatRecoveryRef.current = false
+      antiCheatActiveRef.current = !shouldTerminate
       setResumeAvailable(false)
       setStep(activeStep)
     } catch (error) {
@@ -814,9 +819,11 @@ export default function HomePage() {
 
     violationsRef.current = []
     forcedTerminationRef.current = false
+    antiCheatRecoveryRef.current = false
     lastViolationAtRef.current = Date.now()
     setViolationCount(0)
     setAntiCheatWarning(null)
+    setTerminationPending(false)
 
     setLoading(true)
     let participant: { participant_id?: number; section_deadline?: string; package_code?: string; package_name?: string } | null = null
@@ -925,7 +932,7 @@ export default function HomePage() {
     if (!scoreResponse.ok || !scoreData?.success) {
       setPageMessage(scoreData?.error || 'Hasil belum tersimpan. Periksa koneksi lalu klik Selesaikan kembali.')
       submitting.current = false
-      antiCheatActiveRef.current = true
+      antiCheatActiveRef.current = !forcedTerminationRef.current
       setLoading(false)
       return
     }
@@ -933,12 +940,18 @@ export default function HomePage() {
     setLoading(false)
     await fetch('/api/test-session', { method: 'DELETE' }).catch(() => undefined)
     if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
+    setTerminationPending(false)
     setStep('selesai')
   }, [pesertaId, listening, structure, reading, answersListening, answersStructure, answersReading])
 
   useEffect(() => {
     submitRef.current = () => { void submit() }
   }, [submit])
+
+  useEffect(() => {
+    if (!terminationPending || !pesertaId || !['listening', 'structure', 'reading'].includes(step) || submitting.current) return
+    submitRef.current()
+  }, [terminationPending, pesertaId, step])
 
   const persistProgress = useCallback(() => {
     if (!pesertaId || submitting.current || !['listening', 'structure', 'reading'].includes(step)) return Promise.resolve(false)
@@ -949,7 +962,7 @@ export default function HomePage() {
       answersListening,
       answersStructure,
       answersReading,
-      violationCount,
+      violationCount: violationsRef.current.length,
       violations: violationsRef.current.slice(0, 10),
       heardListeningDirections,
       heardListeningGroups,
@@ -981,7 +994,7 @@ export default function HomePage() {
     })
     saveQueueRef.current = queuedSave
     return queuedSave
-  }, [pesertaId, step, index, answersListening, answersStructure, answersReading, violationCount, heardListeningDirections, heardListeningGroups])
+  }, [pesertaId, step, index, answersListening, answersStructure, answersReading, heardListeningDirections, heardListeningGroups])
 
   useEffect(() => {
     if (!pesertaId || !['listening', 'structure', 'reading'].includes(step)) return
@@ -1003,7 +1016,12 @@ export default function HomePage() {
   }, [pesertaId, persistProgress, step])
 
   const recordViolation = useCallback((type: ViolationType) => {
-    if (!antiCheatActiveRef.current || submitting.current) return
+    if (
+      !antiCheatActiveRef.current ||
+      antiCheatRecoveryRef.current ||
+      forcedTerminationRef.current ||
+      submitting.current
+    ) return
 
     const now = Date.now()
     if (now - lastViolationAtRef.current < 1800) return
@@ -1018,32 +1036,59 @@ export default function HomePage() {
     const violations = [...violationsRef.current, violation]
     violationsRef.current = violations
     setViolationCount(violations.length)
+    void persistProgress()
 
     if (violations.length >= 2) {
       antiCheatActiveRef.current = false
       forcedTerminationRef.current = true
       setAntiCheatWarning(null)
-      alert('Pelanggaran kedua terdeteksi. Tes dihentikan dan hasil yang telah dikerjakan akan dikirim otomatis.')
+      setPageMessage('')
+      setTerminationPending(true)
       submitRef.current()
       return
     }
 
     setAntiCheatWarning(violation)
-  }, [step])
+  }, [persistProgress, step])
 
   useEffect(() => {
     if (step === 'access' || step === 'biodata' || step === 'selesai') return
+    const pendingSignals = pendingViolationSignalsRef.current
+
+    const queueViolationSignal = (type: ViolationType) => {
+      if (
+        !antiCheatActiveRef.current ||
+        antiCheatRecoveryRef.current ||
+        forcedTerminationRef.current ||
+        submitting.current
+      ) return
+
+      pendingSignals.add(type)
+      if (violationFlushTimerRef.current !== null) return
+
+      // Browser biasanya mengirim visibilitychange, blur, dan fullscreenchange
+      // dalam satu rangkaian. Kelompokkan ketiganya menjadi satu kejadian.
+      violationFlushTimerRef.current = window.setTimeout(() => {
+        violationFlushTimerRef.current = null
+        const incidentType = classifyViolationIncident(pendingSignals)
+        pendingSignals.clear()
+        if (incidentType) recordViolation(incidentType)
+      }, 350)
+    }
 
     const handleVisibility = () => {
-      if (document.visibilityState === 'hidden') recordViolation('TAB_HIDDEN')
+      if (document.visibilityState === 'hidden') queueViolationSignal('TAB_HIDDEN')
     }
+    let blurCheckTimer: number | null = null
     const handleBlur = () => {
-      window.setTimeout(() => {
-        if (!document.hasFocus()) recordViolation('WINDOW_BLUR')
+      if (blurCheckTimer !== null) window.clearTimeout(blurCheckTimer)
+      blurCheckTimer = window.setTimeout(() => {
+        blurCheckTimer = null
+        if (!document.hasFocus()) queueViolationSignal('WINDOW_BLUR')
       }, 0)
     }
     const handleFullscreen = () => {
-      if (!document.fullscreenElement) recordViolation('FULLSCREEN_EXIT')
+      if (!document.fullscreenElement) queueViolationSignal('FULLSCREEN_EXIT')
     }
     const blockContextMenu = (event: MouseEvent) => event.preventDefault()
     const blockClipboard = (event: ClipboardEvent) => event.preventDefault()
@@ -1064,6 +1109,12 @@ export default function HomePage() {
     window.addEventListener('keydown', blockShortcut, true)
 
     return () => {
+      if (blurCheckTimer !== null) window.clearTimeout(blurCheckTimer)
+      if (violationFlushTimerRef.current !== null) {
+        window.clearTimeout(violationFlushTimerRef.current)
+        violationFlushTimerRef.current = null
+      }
+      pendingSignals.clear()
       document.removeEventListener('visibilitychange', handleVisibility)
       document.removeEventListener('fullscreenchange', handleFullscreen)
       document.removeEventListener('contextmenu', blockContextMenu)
@@ -1076,14 +1127,33 @@ export default function HomePage() {
   }, [recordViolation, step])
 
   const resumeAfterWarning = async () => {
+    antiCheatRecoveryRef.current = true
+    pendingViolationSignalsRef.current.clear()
+    if (violationFlushTimerRef.current !== null) {
+      window.clearTimeout(violationFlushTimerRef.current)
+      violationFlushTimerRef.current = null
+    }
+    if (recoveryGraceTimerRef.current !== null) window.clearTimeout(recoveryGraceTimerRef.current)
+
     try {
       if (!document.fullscreenElement) await document.documentElement.requestFullscreen({ navigationUI: 'hide' })
       lastViolationAtRef.current = Date.now()
       setAntiCheatWarning(null)
     } catch {
       alert('Anda harus mengizinkan fullscreen untuk kembali mengerjakan tes.')
+    } finally {
+      lastViolationAtRef.current = Date.now()
+      recoveryGraceTimerRef.current = window.setTimeout(() => {
+        antiCheatRecoveryRef.current = false
+        recoveryGraceTimerRef.current = null
+      }, 750)
     }
   }
+
+  useEffect(() => () => {
+    if (violationFlushTimerRef.current !== null) window.clearTimeout(violationFlushTimerRef.current)
+    if (recoveryGraceTimerRef.current !== null) window.clearTimeout(recoveryGraceTimerRef.current)
+  }, [])
 
   if (step === 'access') {
     return (
@@ -1301,7 +1371,26 @@ export default function HomePage() {
 
   return (
     <main style={{ ...testPage, maxWidth: isReading ? 900 : 700 }}>
-      {antiCheatWarning && (
+      {terminationPending ? (
+        <div style={antiCheatOverlay} role="alertdialog" aria-modal="true" aria-labelledby="anti-cheat-termination-title">
+          <div style={antiCheatDialog}>
+            <div style={warningIcon}>!</div>
+            <h2 id="anti-cheat-termination-title" style={{ margin: 0, color: '#991b1b' }}>Tes Dihentikan</h2>
+            <p style={{ margin: 0, lineHeight: 1.6 }}>
+              Pelanggaran kedua telah terdeteksi. Halaman soal dikunci dan hasil yang sudah dikerjakan sedang disimpan otomatis.
+            </p>
+            {pageMessage && <p role="alert" style={{ ...errorNotice, margin: 0 }}>{pageMessage}</p>}
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => { submitRef.current() }}
+              style={{ ...purpleButton(loading), width: '100%' }}
+            >
+              {loading ? 'Menyimpan hasil...' : 'Coba Simpan Hasil Kembali'}
+            </button>
+          </div>
+        </div>
+      ) : antiCheatWarning && (
         <div style={antiCheatOverlay} role="alertdialog" aria-modal="true" aria-labelledby="anti-cheat-title">
           <div style={antiCheatDialog}>
             <div style={warningIcon}>!</div>

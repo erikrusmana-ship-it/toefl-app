@@ -36,6 +36,9 @@ jobs:
       - name: TypeScript type check
         run: npx tsc --noEmit > tsc.txt 2>&1
 
+      - name: Run unit tests
+        run: npm run test:unit > unit.txt 2>&1
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium > playwright_install.txt 2>&1
 
@@ -70,6 +73,8 @@ jobs:
           cat build.txt || true
           echo "--- tsc.txt ---"
           cat tsc.txt || true
+          echo "--- unit.txt ---"
+          cat unit.txt || true
 
       - name: Upload test artifacts
         if: always()
@@ -80,6 +85,7 @@ jobs:
             lint.txt
             build.txt
             tsc.txt
+            unit.txt
             playwright_install.txt
             e2e.txt
             next.log

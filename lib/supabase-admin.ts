@@ -2,6 +2,11 @@ import 'server-only'
 
 import { createClient } from '@supabase/supabase-js'
 
+import { createSupabaseRetryFetch } from '@/lib/supabase-retry'
+
+const supabaseFetch =
+  createSupabaseRetryFetch()
+
 export function createSupabaseAdminClient() {
   const supabaseUrl =
     process.env.SUPABASE_URL ||
@@ -31,6 +36,9 @@ export function createSupabaseAdminClient() {
         persistSession: false,
         autoRefreshToken: false,
         detectSessionInUrl: false,
+      },
+      global: {
+        fetch: supabaseFetch,
       },
     }
   )

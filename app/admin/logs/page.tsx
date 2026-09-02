@@ -62,31 +62,9 @@ export default async function LogsPage({ searchParams }: { searchParams?: { [key
 
   // export CSV for current page or entire filtered dataset
   const exportAll = (searchParams?.exportAll as string) === '1'
-  if (exportCsv) {
-    if (exportAll) {
-      // fetch all filtered rows (cap at 10k)
-      let allBuilder: any = base
-      if (level) allBuilder = allBuilder.eq('level', level)
-      if (q) allBuilder = allBuilder.ilike('message', `%${q}%`)
-      allBuilder = allBuilder.order('created_at', { ascending: false }).limit(10000)
-      const { data: allData } = await allBuilder
-      const csv = toCSV(allData || [])
-      return new Response(csv, {
-        headers: {
-          'Content-Type': 'text/csv; charset=utf-8',
-          'Content-Disposition': `attachment; filename=client_logs_all_${Date.now()}.csv`,
-        },
-      })
-    }
-
-    const csv = toCSV(data || [])
-    return new Response(csv, {
-      headers: {
-        'Content-Type': 'text/csv; charset=utf-8',
-        'Content-Disposition': `attachment; filename=client_logs_${Date.now()}.csv`,
-      },
-    })
-  }
+  // CSV export is handled by a separate route handler to avoid returning
+  // Response objects from the page component (which breaks App Router typing).
+  const exportBase = '/admin/logs/export'
 
   const nextPage = page + 1
   const prevPage = page > 1 ? page - 1 : null
@@ -107,8 +85,8 @@ export default async function LogsPage({ searchParams }: { searchParams?: { [key
           </select>
           <input name="pageSize" defaultValue={String(pageSize)} className="border px-2 py-1 w-20" />
           <button type="submit" className="bg-violet-600 text-white px-3 py-1">Filter</button>
-          <a href={`?${new URLSearchParams({ ...(q ? { q } : {}), ...(level ? { level } : {}), page: String(page), pageSize: String(pageSize), export: 'csv' })}`} className="ml-2 underline">Export page CSV</a>
-          <a href={`?${new URLSearchParams({ ...(q ? { q } : {}), ...(level ? { level } : {}), export: 'csv', exportAll: '1' })}`} className="ml-2 underline">Export all CSV</a>
+          <a href={`${exportBase}?${new URLSearchParams({ ...(q ? { q } : {}), ...(level ? { level } : {}), page: String(page), pageSize: String(pageSize) })}`} className="ml-2 underline">Export page CSV</a>
+          <a href={`${exportBase}?${new URLSearchParams({ ...(q ? { q } : {}), ...(level ? { level } : {}), exportAll: '1' })}`} className="ml-2 underline">Export all CSV</a>
         </form>
       </div>
 

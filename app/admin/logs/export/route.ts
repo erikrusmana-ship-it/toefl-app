@@ -51,7 +51,12 @@ export async function GET(request: Request) {
     try {
       const allBuilder = base.order('created_at', { ascending: false }).limit(10000)
       const { data: allData, error } = await allBuilder
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      if (error) {
+        if (String(error.message || '').includes("Could not find the table 'public.client_logs'")) {
+          return new Response(toCSV([]), { headers: { 'Content-Type': 'text/csv; charset=utf-8' } })
+        }
+        return NextResponse.json({ error: error.message }, { status: 500 })
+      }
       const csv = toCSV(allData || [])
       return new Response(csv, {
         headers: {
@@ -73,7 +78,12 @@ export async function GET(request: Request) {
   try {
     const builder = base.order('created_at', { ascending: false }).range(start, end)
     const { data, error } = await builder
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) {
+      if (String(error.message || '').includes("Could not find the table 'public.client_logs'")) {
+        return new Response(toCSV([]), { headers: { 'Content-Type': 'text/csv; charset=utf-8' } })
+      }
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
 
     const csv = toCSV(data || [])
     return new Response(csv, {

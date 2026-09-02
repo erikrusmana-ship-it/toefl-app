@@ -413,6 +413,22 @@ function ReliableAudio({
   const [sourceIndex, setSourceIndex] = useState(0)
   const audioRef = useRef<HTMLAudioElement>(null)
   const source = sources[sourceIndex]
+  const [needsUserGesture, setNeedsUserGesture] = useState(false)
+
+  const tryAutoPlay = async () => {
+    try {
+      // attempt to play; some browsers block autoplay and will reject the promise
+      await audioRef.current?.play()
+      setNeedsUserGesture(false)
+    } catch (err: any) {
+      // If play was disallowed (NotAllowedError), require user gesture
+      const name = err?.name || ''
+      const message = String(err?.message || '')
+      if (/NotAllowedError|not allowed|play()|DOMException/i.test(name + message)) {
+        setNeedsUserGesture(true)
+      }
+    }
+  }
 
   // Track retry attempts per source to avoid immediately skipping a source
   const retryCountsRef = useRef<number[]>([])
@@ -422,6 +438,9 @@ function ReliableAudio({
     // initialize retry counts when sources change
     retryCountsRef.current = new Array(sources.length).fill(0)
     setSourceIndex(0)
+    // try autoplay; if blocked we'll surface a play button
+    // delay slightly to give browser a chance to settle
+    setTimeout(() => void tryAutoPlay(), 50)
   }, [sources])
 
   const handleError = async (event?: SyntheticEvent<HTMLAudioElement, Event>) => {
@@ -474,22 +493,41 @@ function ReliableAudio({
     onAllSourcesFailed()
   }
 
-  return (
-    <audio
-      ref={audioRef}
-      key={`${sourceIndex}:${source}`}
-      aria-label={label}
-      controls
-      controlsList="nodownload noplaybackrate noremoteplayback"
-      autoPlay
-      preload="auto"
-      onCanPlay={onReady}
-      onEnded={onEnded}
-      onError={handleError}
-      onContextMenu={(event) => event.preventDefault()}
-      src={source}
-      style={{ width: '100%', margin: '12px 0' }}
-    />
+  const playOnUserGesture = async () => {
+    try {
+      await audioRef.current?.play()
+      setNeedsUserGesture(false)
+    } catch {
+      // still failing; keep the button visible so user can retry
+      setNeedsUserGesture(true)
+    }
+  }
+
+    return (
+    <div style={{ position: 'relative' }}>
+      <audio
+        ref={audioRef}
+        key={`${sourceIndex}:${source}`}
+        aria-label={label}
+        controls
+        controlsList="nodownload noplaybackrate noremoteplayback"
+        autoPlay
+        preload="auto"
+        onCanPlay={onReady}
+        onEnded={onEnded}
+        onError={handleError}
+        onContextMenu={(event) => event.preventDefault()}
+        src={source}
+        style={{ width: '100%', margin: '12px 0' }}
+      />
+      {needsUserGesture && (
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 8 }}>
+          <button type="button" onClick={playOnUserGesture} style={{ padding: '8px 12px', background: '#7c3aed', color: '#fff', border: 'none', borderRadius: 6 }}>
+            Klik untuk memutar audio
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 

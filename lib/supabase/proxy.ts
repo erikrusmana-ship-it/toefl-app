@@ -24,7 +24,9 @@ export async function updateSession(request: NextRequest) {
 
   const { data } = await supabase.auth.getClaims()
   const claims = data?.claims as { app_metadata?: { role?: string } } | undefined
-  const isAdmin = claims?.app_metadata?.role === 'admin'
+  // allow a development-only test bypass via header `x-test-admin: 1`
+  const isTestBypass = process.env.NODE_ENV !== 'production' && request.headers.get('x-test-admin') === '1'
+  const isAdmin = isTestBypass || claims?.app_metadata?.role === 'admin'
   const isAdminRoute = request.nextUrl.pathname.startsWith('/admin')
   const isLoginRoute = request.nextUrl.pathname === '/admin/login'
   const isPasswordSetupRoute = request.nextUrl.pathname === '/admin/set-password'

@@ -184,9 +184,9 @@ function packageAudioPath(path: string, packageCode: PackageCode) {
 
 function audioSources(path: string, packageCode: PackageCode, preferred?: string) {
   return Array.from(new Set([
-    preferred,
     packageAudioPath(path, packageCode),
     path,
+    preferred,
   ].filter((source): source is string => Boolean(source?.trim()))))
 }
 

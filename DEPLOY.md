@@ -17,26 +17,9 @@ Application environment variables (set these in Vercel Project > Variables):
 - `TOEFL_SESSION_SECRET` (HMAC signing secret, minimum 32 chars)
 - `TOEFL_SESSION_COOKIE` (optional, name of session cookie)
 
-Optional: Sentry monitoring (recommended for production)
+Optional: monitoring and error tracking
 
-- Install Sentry in your project:
-
-```bash
-npm install --save @sentry/nextjs
-npx @sentry/wizard -i nextjs
-```
-
-- Add these environment variables in Vercel:
-
-- `SENTRY_DSN`
-- `SENTRY_AUTH_TOKEN` (for creating releases via CI)
-- `SENTRY_ORG` and `SENTRY_PROJECT` (for the Sentry CLI/wizard)
-- `SENTRY_TRACES_SAMPLE_RATE` (e.g. `0.05`)
-
-- This repository includes basic config files `sentry.client.config.js` and `sentry.server.config.js` that initialize Sentry when `SENTRY_DSN` is set.
-
-Notes on release uploads and source maps:
-- To upload source maps and create releases during CI, configure `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, and `SENTRY_PROJECT` as GitHub secrets or Vercel environment variables and use the Sentry CLI or the Sentry Action in your pipeline.
+You may integrate a monitoring provider (Sentry, Datadog, etc.) if you want error and performance visibility. This repo does not include an opinionated integration by default — add provider-specific config and environment variables only if you choose one.
 
 Quick setup steps:
 

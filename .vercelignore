@@ -1,0 +1,12 @@
+node_modules
+.vscode
+/.github
+/.github/**
+tests
+tests/**
+scripts
+scripts/**
+*.log
+.env*
+supabase/*.sql
+.DS_Store

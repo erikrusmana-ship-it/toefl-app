@@ -1,7 +1,7 @@
 'use client'
 /* eslint-disable @next/next/no-img-element */
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent, type ReactNode, type SyntheticEvent } from 'react'
 import {
   classifyViolationIncident,
   normalizeAntiCheatViolations,
@@ -424,7 +424,7 @@ function ReliableAudio({
     setSourceIndex(0)
   }, [sources])
 
-  const handleError = async (event?: Event) => {
+  const handleError = async (event?: SyntheticEvent<HTMLAudioElement, Event>) => {
     // If triggered directly by the <audio> onError event, treat as a playback
     // failure and move to the next source immediately. This matches test
     // expectations where an emitted error should cause a fallback.

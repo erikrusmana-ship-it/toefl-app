@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import ErrorReporter from './components/ErrorReporter.client'
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -28,7 +29,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <head>
         <meta name="google" content="notranslate" />
       </head>
-      <body translate="no" className="notranslate min-h-full flex flex-col">{children}</body>
+      <body translate="no" className="notranslate min-h-full flex flex-col">
+        <ErrorReporter />
+        {children}
+      </body>
     </html>
   );
 }

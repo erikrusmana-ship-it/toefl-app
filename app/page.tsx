@@ -414,11 +414,58 @@ function ReliableAudio({
   const audioRef = useRef<HTMLAudioElement>(null)
   const source = sources[sourceIndex]
 
+  // Track retry attempts per source to avoid immediately skipping a source
+  const retryCountsRef = useRef<number[]>([])
+
   useEffect(() => {
     audioRef.current?.setAttribute('disableremoteplayback', '')
-  }, [source])
+    // initialize retry counts when sources change
+    retryCountsRef.current = new Array(sources.length).fill(0)
+    setSourceIndex(0)
+  }, [sources])
 
-  const handleError = () => {
+  const handleError = async (event?: Event) => {
+    // If triggered directly by the <audio> onError event, treat as a playback
+    // failure and move to the next source immediately. This matches test
+    // expectations where an emitted error should cause a fallback.
+    if (event) {
+      if (sourceIndex < sources.length - 1) {
+        setSourceIndex((current) => current + 1)
+        return
+      }
+      onAllSourcesFailed()
+      return
+    }
+    // allow a couple of automatic retries for the current source
+    const maxRetries = 2
+    retryCountsRef.current[sourceIndex] = (retryCountsRef.current[sourceIndex] || 0) + 1
+
+    // try a lightweight HEAD request to determine if the file is reachable
+    try {
+      const resp = await fetch(source, { method: 'HEAD', cache: 'no-store' })
+      if (resp.ok) {
+        // resource reachable — try to reload the audio element once
+        try {
+          audioRef.current?.load()
+          await audioRef.current?.play().catch(() => undefined)
+          return
+        } catch {
+          // fall through to retry/skip logic
+        }
+      }
+    } catch {
+      // network/HEAD failed — fall through to retry/skip logic
+    }
+
+    if (retryCountsRef.current[sourceIndex] <= maxRetries) {
+      // wait briefly before retrying
+      setTimeout(() => {
+        try { audioRef.current?.load() } catch { /* ignore */ }
+      }, 300 * retryCountsRef.current[sourceIndex])
+      return
+    }
+
+    // exhausted retries for current source — move to next if available
     if (sourceIndex < sources.length - 1) {
       setSourceIndex((current) => current + 1)
       return

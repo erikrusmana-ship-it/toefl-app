@@ -36,7 +36,8 @@ export default async function LogsPage({ searchParams }: { searchParams?: { [key
 
   const supabase = createSupabaseAdminClient()
 
-  let builder: any = supabase.from('client_logs').select('id, level, message, href, stack, meta, created_at')
+  let base = supabase.from('client_logs').select('id, level, message, href, stack, meta, created_at', { count: 'exact' })
+  let builder: any = base
   if (level) builder = builder.eq('level', level)
   if (q) builder = builder.ilike('message', `%${q}%`)
 
@@ -45,7 +46,7 @@ export default async function LogsPage({ searchParams }: { searchParams?: { [key
 
   builder = builder.order('created_at', { ascending: false }).range(start, end)
 
-  const { data, error } = await builder
+  const { data, error, count } = await builder
 
   if (error) {
     return (
@@ -56,7 +57,28 @@ export default async function LogsPage({ searchParams }: { searchParams?: { [key
     )
   }
 
+  const total = typeof count === 'number' ? count : 0
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  // export CSV for current page or entire filtered dataset
+  const exportAll = (searchParams?.exportAll as string) === '1'
   if (exportCsv) {
+    if (exportAll) {
+      // fetch all filtered rows (cap at 10k)
+      let allBuilder: any = base
+      if (level) allBuilder = allBuilder.eq('level', level)
+      if (q) allBuilder = allBuilder.ilike('message', `%${q}%`)
+      allBuilder = allBuilder.order('created_at', { ascending: false }).limit(10000)
+      const { data: allData } = await allBuilder
+      const csv = toCSV(allData || [])
+      return new Response(csv, {
+        headers: {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename=client_logs_all_${Date.now()}.csv`,
+        },
+      })
+    }
+
     const csv = toCSV(data || [])
     return new Response(csv, {
       headers: {
@@ -72,7 +94,7 @@ export default async function LogsPage({ searchParams }: { searchParams?: { [key
   return (
     <div className="p-6">
       <h1 className="text-2xl font-semibold">Client Logs</h1>
-      <p className="text-sm text-muted-foreground">Showing page {page} — up to {pageSize} logs</p>
+      <p className="text-sm text-muted-foreground">Showing page {page} of {totalPages} — total {total} logs</p>
 
       <div className="mt-4 mb-4">
         <form method="get" className="flex gap-2">
@@ -85,7 +107,8 @@ export default async function LogsPage({ searchParams }: { searchParams?: { [key
           </select>
           <input name="pageSize" defaultValue={String(pageSize)} className="border px-2 py-1 w-20" />
           <button type="submit" className="bg-violet-600 text-white px-3 py-1">Filter</button>
-          <a href={`?${new URLSearchParams({ ...(q ? { q } : {}), ...(level ? { level } : {}), page: String(page), pageSize: String(pageSize), export: 'csv' })}`} className="ml-2 underline">Export CSV</a>
+          <a href={`?${new URLSearchParams({ ...(q ? { q } : {}), ...(level ? { level } : {}), page: String(page), pageSize: String(pageSize), export: 'csv' })}`} className="ml-2 underline">Export page CSV</a>
+          <a href={`?${new URLSearchParams({ ...(q ? { q } : {}), ...(level ? { level } : {}), export: 'csv', exportAll: '1' })}`} className="ml-2 underline">Export all CSV</a>
         </form>
       </div>
 

@@ -3,7 +3,27 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json()
+    // try to parse JSON robustly (some environments may behave oddly)
+    let body: any = {}
+    try {
+      body = await request.json()
+    } catch (parseErr) {
+      try {
+        const text = await request.text()
+        body = text ? JSON.parse(text) : {}
+      } catch (textErr) {
+        console.error('Failed to parse /api/log request body', parseErr, textErr)
+        return NextResponse.json({ error: 'invalid payload' }, { status: 400 })
+      }
+    }
+
+    // log incoming headers for debug visibility when troubleshooting
+    try {
+      // eslint-disable-next-line no-console
+      console.debug('[/api/log] headers:', Object.fromEntries((request.headers as any) || []))
+    } catch (_) {
+      /* ignore */
+    }
 
     const level = (body.level as string) || 'error'
     const message = body.message || '<no message>'

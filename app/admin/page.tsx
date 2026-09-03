@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { logoutAdmin, toggleAccessCode } from './actions'
+import { logoutAdmin, toggleAccessCode, forceAdvanceParticipant } from './actions'
 import AutoRefresh from './auto-refresh'
 import RetryResultEmails from './retry-result-emails'
 
@@ -292,7 +292,16 @@ export default async function AdminPage() {
                               ))}
                             </ol>
                           ) : participant.pelanggaran_count > 0 ? `${participant.pelanggaran_count} pelanggaran (rincian tidak tersedia)` : 'Tidak ada'}
-                        </td><td className="px-3 py-3">{formatDate(participant.test_started_at || participant.created_at)}</td><td className="px-3 py-3">{formatDate(participant.submitted_at)}</td>
+                        </td>
+                        <td className="px-3 py-3">{formatDate(participant.test_started_at || participant.created_at)}</td>
+                        <td className="px-3 py-3">{formatDate(participant.submitted_at)}</td>
+                        <td className="px-3 py-3">
+                          <form action={forceAdvanceParticipant} className="inline">
+                            <input type="hidden" name="id" value={participant.id} />
+                            <input type="hidden" name="action" value="next" />
+                            <button className="rounded-md bg-violet-100 px-3 py-1 text-sm text-violet-900">Paksa Lanjut</button>
+                          </form>
+                        </td>
                       </tr>
                     })}
                   </tbody>

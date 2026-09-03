@@ -712,6 +712,77 @@ export default function HomePage() {
     return () => { active = false }
   }, [])
 
+  // Poll server for admin-forced progress updates. When admin updates
+  // peserta.current_section/current_question and bumps progress_revision,
+  // client will apply the server progress so the participant can continue
+  // without redoing previous questions or re-login.
+  useEffect(() => {
+    if (!pesertaId) return
+    let mounted = true
+
+    const checkServerProgress = async () => {
+      try {
+        const response = await fetch('/api/test-session', { cache: 'no-store' })
+        const sessionData = await response.json().catch(() => null)
+        if (!response.ok || !sessionData?.hasSession || !sessionData?.progress) return
+
+        const serverProgress = sessionData.progress as {
+          section?: string
+          question?: number
+          section_deadline?: string
+          progress_revision?: number
+          progress?: any
+        }
+
+        if (!mounted) return
+
+        const serverRevision = Number(serverProgress.progress_revision || 0)
+        if (serverRevision <= progressRevisionRef.current) return
+
+        // Only apply when we have the question bank loaded to map question indexes
+        if (listening.length + structure.length + reading.length === 0) return
+
+        const activeStep: ActiveStep = ['listening', 'structure', 'reading'].includes(String(serverProgress.section))
+          ? (serverProgress.section as ActiveStep)
+          : 'listening'
+
+        const maxQuestions = activeStep === 'listening' ? listening.length : activeStep === 'structure' ? structure.length : reading.length
+        const restoredIndex = Math.max(0, Math.min((Number(serverProgress.question) || 1) - 1, Math.max(0, maxQuestions - 1)))
+        const storedProgress = serverProgress.progress || {}
+
+        setIndex(restoredIndex)
+        setSectionDeadline(serverProgress.section_deadline || new Date(Date.now() + 40 * 60 * 1000).toISOString())
+        progressRevisionRef.current = serverRevision
+
+        // Apply answers if provided
+        try {
+          setAnswersListening(normalizeAnswers(storedProgress.answersListening))
+          setAnswersStructure(normalizeAnswers(storedProgress.answersStructure))
+          setAnswersReading(normalizeAnswers(storedProgress.answersReading))
+        } catch {}
+
+        // Update other anti-cheat/violation state conservatively
+        try {
+          const storedViolations = normalizeAntiCheatViolations(storedProgress.violations) || []
+          violationsRef.current = storedViolations
+          setViolationCount(storedViolations.length)
+        } catch {}
+
+        setPackageName(sessionData.progress?.package_name || packageName)
+        setPackageCode(sessionData.progress?.package_code || packageCode)
+        setPesertaId(Number(sessionData.participantId))
+        setStep(activeStep)
+      } catch (error) {
+        // ignore polling errors
+      }
+    }
+
+    const id = setInterval(checkServerProgress, 5000)
+    // also run immediately
+    void checkServerProgress()
+    return () => { mounted = false; clearInterval(id) }
+  }, [pesertaId, listening.length, structure.length, reading.length, packageCode, packageName])
+
   const verifyAccessCode = async (event: FormEvent) => {
     event.preventDefault()
     if (!hydrated) return

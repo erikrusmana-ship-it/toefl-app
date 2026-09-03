@@ -297,11 +297,7 @@ export default async function AdminPage() {
                         <td className="px-3 py-3">{formatDate(participant.test_started_at || participant.created_at)}</td>
                         <td className="px-3 py-3">{formatDate(participant.submitted_at)}</td>
                         <td className="px-3 py-3">
-                          <form action={forceAdvanceParticipant} className="inline">
-                            <input type="hidden" name="id" value={participant.id} />
-                            <input type="hidden" name="action" value="next" />
-                            <button className="rounded-md bg-violet-100 px-3 py-1 text-sm text-violet-900">Paksa Lanjut</button>
-                          </form>
+                          <ForceAdvanceForm id={participant.id} />
                         </td>
                       </tr>
                     })}

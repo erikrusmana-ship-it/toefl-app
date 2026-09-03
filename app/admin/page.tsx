@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { logoutAdmin, toggleAccessCode } from './actions'
 import ForceAdvanceForm from './ForceAdvanceForm.client'
+import ForceDecisionForm, { ExpelForm, AllowForm } from './ForceDecisionForm.client'
 import AutoRefresh from './auto-refresh'
 import RetryResultEmails from './retry-result-emails'
 
@@ -298,6 +299,12 @@ export default async function AdminPage() {
                         <td className="px-3 py-3">{formatDate(participant.submitted_at)}</td>
                         <td className="px-3 py-3">
                           <ForceAdvanceForm id={participant.id} />
+                          {participant.pelanggaran_count >= 2 && participant.status_tes !== 'dihentikan_pelanggaran' ? (
+                            <div className="mt-2 flex gap-2">
+                              <AllowForm id={participant.id} />
+                              <ExpelForm id={participant.id} />
+                            </div>
+                          ) : null}
                         </td>
                       </tr>
                     })}

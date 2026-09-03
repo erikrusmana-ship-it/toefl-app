@@ -681,6 +681,7 @@ export default function HomePage() {
   const [navigating, setNavigating] = useState(false)
   const [antiCheatWarning, setAntiCheatWarning] = useState<AntiCheatViolation | null>(null)
   const [terminationPending, setTerminationPending] = useState(false)
+  const [waitingAdminApproval, setWaitingAdminApproval] = useState(false)
   const [violationCount, setViolationCount] = useState(0)
   const submitting = useRef(false)
   const violationsRef = useRef<AntiCheatViolation[]>([])
@@ -753,6 +754,10 @@ export default function HomePage() {
         setIndex(restoredIndex)
         setSectionDeadline(serverProgress.section_deadline || new Date(Date.now() + 40 * 60 * 1000).toISOString())
         progressRevisionRef.current = serverRevision
+        // If admin reviewed and allowed, clear waiting flag and resume
+        setWaitingAdminApproval(false)
+        forcedTerminationRef.current = false
+        setTerminationPending(false)
 
         // Apply answers if provided
         try {
@@ -896,8 +901,18 @@ export default function HomePage() {
       progressRevisionRef.current = Math.max(0, Number(serverProgress.progress_revision) || 0)
       violationsRef.current = storedViolations
       setViolationCount(storedViolations.length)
-      forcedTerminationRef.current = shouldTerminate
-      setTerminationPending(shouldTerminate)
+      // If there are 2+ stored violations, wait for admin decision instead of auto-terminating.
+      if (shouldTerminate) {
+        forcedTerminationRef.current = false
+        setTerminationPending(false)
+        setWaitingAdminApproval(true)
+        antiCheatActiveRef.current = false
+      } else {
+        forcedTerminationRef.current = false
+        setTerminationPending(false)
+        setWaitingAdminApproval(false)
+        antiCheatActiveRef.current = true
+      }
       lastViolationAtRef.current = Date.now()
       antiCheatRecoveryRef.current = false
       antiCheatActiveRef.current = !shouldTerminate
@@ -1196,11 +1211,11 @@ export default function HomePage() {
 
     if (violations.length >= 2) {
       antiCheatActiveRef.current = false
-      forcedTerminationRef.current = true
+      forcedTerminationRef.current = false
       setAntiCheatWarning(null)
-      setPageMessage('')
-      setTerminationPending(true)
-      submitRef.current()
+      setPageMessage('Pelanggaran terdeteksi sebanyak 2 kali. Menunggu keputusan admin untuk melanjutkan atau dikeluarkan.')
+      setTerminationPending(false)
+      setWaitingAdminApproval(true)
       return
     }
 

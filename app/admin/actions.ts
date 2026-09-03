@@ -35,6 +35,45 @@ export async function toggleAccessCode(formData: FormData) {
   revalidatePath('/admin')
 }
 
+export async function adminExpelParticipant(formData: FormData) {
+  const supabase = await requireAdmin()
+  const id = Number(formData.get('id'))
+  if (!Number.isInteger(id) || id < 1) return
+
+  const { error } = await supabase.from('peserta').update({
+    status_tes: 'dihentikan_pelanggaran',
+    submitted_at: new Date().toISOString(),
+    admin_reviewed: true,
+    admin_review_action: 'expel',
+    admin_reviewed_at: new Date().toISOString(),
+  }).eq('id', id)
+
+  if (error) throw new Error(`Gagal mengeluarkan peserta: ${error.message}`)
+  revalidatePath('/admin')
+}
+
+export async function adminAllowParticipant(formData: FormData) {
+  const supabase = await requireAdmin()
+  const id = Number(formData.get('id'))
+  if (!Number.isInteger(id) || id < 1) return
+
+  const { data, error: selErr } = await supabase.from('peserta').select('progress_revision').eq('id', id).limit(1).single()
+  if (selErr) throw new Error('Peserta tidak ditemukan')
+  const bump = (Number(data?.progress_revision || 0) + 1000)
+
+  const { error } = await supabase.from('peserta').update({
+    admin_reviewed: true,
+    admin_review_action: 'allow',
+    admin_reviewed_at: new Date().toISOString(),
+    progress_revision: bump,
+    status_tes: 'sedang',
+    last_activity_at: new Date().toISOString(),
+  }).eq('id', id)
+
+  if (error) throw new Error(`Gagal mengizinkan peserta: ${error.message}`)
+  revalidatePath('/admin')
+}
+
 export async function forceAdvanceParticipant(formData: FormData) {
   const supabase = await requireAdmin()
 

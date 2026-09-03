@@ -1,0 +1,49 @@
+name: 'Apply migrations and run tests'
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  migrate-and-test:
+    runs-on: ubuntu-latest
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install psql
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Run DB migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+        run: |
+          chmod +x ./scripts/run-supabase-migrations.sh
+          ./scripts/run-supabase-migrations.sh
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers and deps
+        run: npx playwright install --with-deps
+
+      - name: Start Next dev server
+        run: |
+          nohup npm run dev > ./next-dev.log 2>&1 &
+          # give Next some time to start
+          npx wait-on http://localhost:3000 -t 120000
+
+      - name: Run Playwright e2e tests
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_AUTO_TERMINATE_ON_SECOND_VIOLATION: 'true'
+        run: npm run test:e2e

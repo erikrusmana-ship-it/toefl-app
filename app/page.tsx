@@ -343,6 +343,8 @@ const READING_PARAGRAPH_STARTS: Record<string, number[]> = {
   'Post-Civil War Reconstruction': [1, 6, 9, 14, 17, 20],
 }
 
+const AUTO_TERMINATE = process.env.NEXT_PUBLIC_AUTO_TERMINATE_ON_SECOND_VIOLATION === 'true'
+
 function listeningPart(soal: SoalItem): ListeningPart {
   if (soal.nomor_soal >= 31 && soal.nomor_soal <= 37) return 'PART B'
   if (soal.nomor_soal >= 38) return 'PART C'
@@ -901,12 +903,20 @@ export default function HomePage() {
       progressRevisionRef.current = Math.max(0, Number(serverProgress.progress_revision) || 0)
       violationsRef.current = storedViolations
       setViolationCount(storedViolations.length)
-      // If there are 2+ stored violations, wait for admin decision instead of auto-terminating.
+      // If there are 2+ stored violations: either auto-terminate (test/CI) or wait admin review (default).
       if (shouldTerminate) {
-        forcedTerminationRef.current = false
-        setTerminationPending(false)
-        setWaitingAdminApproval(true)
-        antiCheatActiveRef.current = false
+        if (AUTO_TERMINATE) {
+          antiCheatActiveRef.current = false
+          forcedTerminationRef.current = true
+          setAntiCheatWarning(null)
+          setPageMessage('')
+          setTerminationPending(true)
+        } else {
+          forcedTerminationRef.current = false
+          setTerminationPending(false)
+          setWaitingAdminApproval(true)
+          antiCheatActiveRef.current = false
+        }
       } else {
         forcedTerminationRef.current = false
         setTerminationPending(false)
@@ -1210,6 +1220,14 @@ export default function HomePage() {
     void persistProgress()
 
     if (violations.length >= 2) {
+      if (AUTO_TERMINATE) {
+        antiCheatActiveRef.current = false
+        forcedTerminationRef.current = true
+        setAntiCheatWarning(null)
+        setPageMessage('')
+        setTerminationPending(true)
+        return
+      }
       antiCheatActiveRef.current = false
       forcedTerminationRef.current = false
       setAntiCheatWarning(null)

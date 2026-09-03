@@ -19,7 +19,7 @@ function toCSV(rows: any[]) {
 export async function GET(request: Request) {
   // require admin session
   // Allow a test-only bypass when running locally with a special header.
-  // This bypass must be explicitly enabled by setting `NEXT_ENABLE_TEST_BYPASS=true`.
+  // Test-only bypass requires `NEXT_ENABLE_TEST_BYPASS=true` and header `x-test-admin: 1`.
   const isTestBypass = process.env.NODE_ENV !== 'production' && process.env.NEXT_ENABLE_TEST_BYPASS === 'true' && (request.headers.get('x-test-admin') === '1')
   if (!isTestBypass) {
     try {

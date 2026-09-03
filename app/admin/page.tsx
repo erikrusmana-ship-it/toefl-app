@@ -1,7 +1,8 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { logoutAdmin, toggleAccessCode, forceAdvanceParticipant } from './actions'
+import { logoutAdmin, toggleAccessCode } from './actions'
+import ForceAdvanceForm from './ForceAdvanceForm.client'
 import AutoRefresh from './auto-refresh'
 import RetryResultEmails from './retry-result-emails'
 

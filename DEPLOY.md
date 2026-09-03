@@ -1,3 +1,96 @@
+## Deployment & Migration Checklist
+
+Follow these steps to safely apply DB migrations, verify policies, and run smoke tests before opening the app to participants.
+
+Prerequisites
+- Repo cloned and in project root.
+- `psql` installed for local migrations.
+- Back up your database (Supabase snapshot) before applying changes in production.
+
+Environment / Secrets
+- Set these env vars for local run or add as repo secrets for CI:
+  - `DATABASE_URL` (Postgres connection string for migrations)
+  - `PGPASSWORD` (optional)
+  - `NEXT_PUBLIC_SUPABASE_URL`
+  - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+  - `SUPABASE_SERVICE_ROLE_KEY` (server-only secret)
+  - `NEXT_ENABLE_TEST_BYPASS` (do NOT set in production)
+  - Optionally: `NEXT_PUBLIC_AUTO_TERMINATE_ON_SECOND_VIOLATION` (set to `true` only for CI/tests)
+
+1) Apply DB migrations (local)
+
+```bash
+# example (replace with your connection string)
+export DATABASE_URL="postgres://postgres:password@db.host:5432/postgres"
+export PGPASSWORD="password"  # optional
+chmod +x ./scripts/run-supabase-migrations.sh
+./scripts/run-supabase-migrations.sh
+```
+
+Files applied by the script:
+- `supabase/add-admin-review-columns.sql`
+- `supabase/proactive-fixes-client-logs.sql` (optional but recommended)
+- `supabase/create-admin-actions.sql`
+- `supabase/admin_actions_rls.sql`
+
+2) Quick verification (psql or Supabase SQL editor)
+
+```bash
+# check admin_actions table
+psql "$DATABASE_URL" -c "SELECT to_regclass('public.admin_actions');"
+
+# check peserta admin columns
+psql "$DATABASE_URL" -c "SELECT column_name FROM information_schema.columns WHERE table_name='peserta' AND column_name IN ('admin_reviewed','admin_review_action','admin_reviewed_at','admin_reviewed_by');"
+```
+
+3) Disable dev bypass in production
+- Ensure `NEXT_ENABLE_TEST_BYPASS` is not set in production environments.
+- Ensure `NEXT_PUBLIC_AUTO_TERMINATE_ON_SECOND_VIOLATION` is `false` or unset in production.
+
+4) Verify RLS & service role
+- Confirm `admin_actions` RLS policy was applied (see `supabase/admin_actions_rls.sql`).
+- Confirm server uses `SUPABASE_SERVICE_ROLE_KEY` for admin writes (`lib/supabase/admin.ts`).
+
+5) Test endpoints
+
+```bash
+# log ingest
+curl -X POST http://localhost:3000/api/log -H 'Content-Type: application/json' -d '{"level":"info","message":"smoke-test"}'
+
+# CSV export (dev only, requires NEXT_ENABLE_TEST_BYPASS=true)
+curl -H 'x-test-admin: 1' 'http://localhost:3000/admin/logs/export?page=1&pageSize=5'
+```
+
+6) Cross-browser manual checks
+- Chrome desktop: fullscreen + audio + anti-cheat flows.
+- Safari macOS & iOS: test fullscreen handling and audio playback (iOS may require user gesture). 
+- Android: verify audio + navigation.
+
+7) Run automated tests
+- Locally (test-mode):
+```bash
+NEXT_PUBLIC_AUTO_TERMINATE_ON_SECOND_VIOLATION=true npm run dev
+npm run test:e2e
+```
+- CI: use workflow `.github/workflows/migrate-and-test.yml`. Add required secrets and run the workflow.
+
+8) Supabase Advisor & backups
+- Run Supabase Advisor; if it reports issues, gather messages and apply fixes.
+- Ensure daily automated backups or take a manual snapshot before migrations.
+
+9) Smoke test as participant + admin
+- Create a test access code and complete a full participant session.
+- Trigger two anti-cheat violations and confirm the UI waits for admin decision.
+- From admin UI, click `Biarkan` or `Keluarkan` and verify `peserta` and `admin_actions` updates.
+
+10) Post-deploy ops
+- Remove any prod debug/test secrets.
+- Monitor logs and autosave errors; configure alerts for failed submissions.
+
+Rollback plan
+- If migration causes issues, restore DB from snapshot and revert the release.
+
+Questions or issues? Paste error output here and I will help diagnose.
 # Deploying to Vercel
 
 This repository is ready to deploy to Vercel. The GitHub Actions workflow `.github/workflows/deploy-vercel.yml` will trigger a production deploy on pushes to `main` when Vercel secrets are configured.

@@ -49,6 +49,13 @@ export async function adminExpelParticipant(formData: FormData) {
   }).eq('id', id)
 
   if (error) throw new Error(`Gagal mengeluarkan peserta: ${error.message}`)
+  // record admin action audit
+  try {
+    const { data: userData } = await supabase.auth.getUser()
+    await supabase.from('admin_actions').insert({ peserta_id: id, admin_user_id: userData?.user?.id || null, action: 'expel', reason: String(formData.get('reason') || '') })
+  } catch (err) {
+    console.error('Failed to write admin action audit', err)
+  }
   revalidatePath('/admin')
 }
 
@@ -71,6 +78,13 @@ export async function adminAllowParticipant(formData: FormData) {
   }).eq('id', id)
 
   if (error) throw new Error(`Gagal mengizinkan peserta: ${error.message}`)
+  // record admin action audit
+  try {
+    const { data: userData } = await supabase.auth.getUser()
+    await supabase.from('admin_actions').insert({ peserta_id: id, admin_user_id: userData?.user?.id || null, action: 'allow', reason: String(formData.get('reason') || '') })
+  } catch (err) {
+    console.error('Failed to write admin action audit', err)
+  }
   revalidatePath('/admin')
 }
 
@@ -128,6 +142,13 @@ export async function forceAdvanceParticipant(formData: FormData) {
   }).eq('id', id)
 
   if (updateError) throw new Error(`Gagal memaksa peserta lanjut: ${updateError.message}`)
+  // record admin action audit
+  try {
+    const { data: userData } = await supabase.auth.getUser()
+    await supabase.from('admin_actions').insert({ peserta_id: id, admin_user_id: userData?.user?.id || null, action: action === 'next' ? 'force_advance' : `force_${action}`, meta: { from: { section, question: q }, to: { section: newSection, question: newQuestion } } })
+  } catch (err) {
+    console.error('Failed to write admin action audit', err)
+  }
   revalidatePath('/admin')
 }
 

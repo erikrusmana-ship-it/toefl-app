@@ -1,24 +1,25 @@
-"use client"
+"use client";
 
-import React from 'react'
-import { forceAdvanceParticipant } from './actions'
+import { forceAdvanceParticipant } from "./actions";
 
-type Props = {
-  id: number
-  action?: 'next' | 'section'
-}
+type ForceAdvanceFormProps = {
+  id: number;
+};
 
-export default function ForceAdvanceForm({ id, action = 'next' }: Props) {
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    const ok = window.confirm('Anda akan memaksa peserta melanjutkan. Lanjutkan?')
-    if (!ok) e.preventDefault()
-  }
-
+export default function ForceAdvanceForm({
+  id,
+}: ForceAdvanceFormProps) {
   return (
-    <form action={forceAdvanceParticipant as unknown as FormData | (() => void)} method="post" onSubmit={handleSubmit} className="inline">
+    <form action={forceAdvanceParticipant}>
       <input type="hidden" name="id" value={id} />
-      <input type="hidden" name="action" value={action} />
-      <button className="rounded-md bg-violet-100 px-3 py-1 text-sm text-violet-900">Paksa Lanjut</button>
+      <input type="hidden" name="action" value="next" />
+
+      <button
+        type="submit"
+        className="rounded-md bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-700"
+      >
+        Paksa Lanjut
+      </button>
     </form>
-  )
+  );
 }

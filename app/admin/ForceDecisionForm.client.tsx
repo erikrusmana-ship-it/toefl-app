@@ -18,9 +18,10 @@ export function AllowForm({
 
       <button
         type="submit"
+        title="Membuka kembali tes pada soal yang sama"
         className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700"
       >
-        Izinkan
+        Lanjutkan Pengerjaan
       </button>
     </form>
   );

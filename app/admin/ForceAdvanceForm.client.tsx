@@ -16,9 +16,10 @@ export default function ForceAdvanceForm({
 
       <button
         type="submit"
+        title="Memindahkan peserta ke soal berikutnya"
         className="rounded-md bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-700"
       >
-        Paksa Lanjut
+        Paksa ke Soal Berikutnya
       </button>
     </form>
   );

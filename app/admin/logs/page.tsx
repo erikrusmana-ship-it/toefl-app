@@ -1,43 +1,45 @@
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { NextResponse } from 'next/server'
 
 export const metadata = {
   title: 'Admin - Client Logs',
 }
 
-function toCSV(rows: any[]) {
-  const headers = ['id', 'created_at', 'level', 'message', 'href', 'stack', 'meta']
-  const escape = (v: any) => {
-    if (v === null || v === undefined) return ''
-    const s = typeof v === 'string' ? v : JSON.stringify(v)
-    return `"${s.replace(/"/g, '""')}"`
-  }
-  const lines = [headers.join(',')]
-  for (const r of rows) {
-    lines.push(headers.map((h) => escape(r[h])).join(','))
-  }
-  return lines.join('\n')
+type ClientLogRow = {
+  id: string | number
+  created_at: string
+  level: string
+  message: string | null
+  href: string | null
+  stack: string | null
+  meta: unknown
 }
 
-export default async function LogsPage({ searchParams }: { searchParams?: { [key: string]: string | string[] } }) {
+type LogsPageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>
+}
+
+function firstParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value
+}
+
+export default async function LogsPage({ searchParams }: LogsPageProps) {
   // require admin
   const client = await createClient()
   const { data: claimsData } = await client.auth.getClaims()
   const claims = claimsData?.claims as { app_metadata?: { role?: string } } | undefined
   if (claims?.app_metadata?.role !== 'admin') redirect('/admin/login')
 
-  const page = Math.max(1, Number((searchParams?.page as string) || '1'))
-  const pageSize = Math.min(200, Math.max(10, Number((searchParams?.pageSize as string) || '50')))
-  const level = (searchParams?.level as string) || undefined
-  const q = (searchParams?.q as string) || undefined
-  const exportCsv = (searchParams?.export as string) === 'csv'
+  const params = (await searchParams) || {}
+  const page = Math.max(1, Number(firstParam(params.page) || '1'))
+  const pageSize = Math.min(200, Math.max(10, Number(firstParam(params.pageSize) || '50')))
+  const level = firstParam(params.level) || undefined
+  const q = firstParam(params.q) || undefined
 
   const supabase = createSupabaseAdminClient()
 
-  let base = supabase.from('client_logs').select('id, level, message, href, stack, meta, created_at', { count: 'exact' })
-  let builder: any = base
+  let builder = supabase.from('client_logs').select('id, level, message, href, stack, meta, created_at', { count: 'exact' })
   if (level) builder = builder.eq('level', level)
   if (q) builder = builder.ilike('message', `%${q}%`)
 
@@ -61,7 +63,6 @@ export default async function LogsPage({ searchParams }: { searchParams?: { [key
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   // export CSV for current page or entire filtered dataset
-  const exportAll = (searchParams?.exportAll as string) === '1'
   // CSV export is handled by a separate route handler to avoid returning
   // Response objects from the page component (which breaks App Router typing).
   const exportBase = '/admin/logs/export'
@@ -103,7 +104,7 @@ export default async function LogsPage({ searchParams }: { searchParams?: { [key
             </tr>
           </thead>
           <tbody>
-            {data?.map((row: any) => (
+            {(data as ClientLogRow[] | null)?.map((row) => (
               <tr key={row.id} className="align-top">
                 <td className="border px-2 py-1 align-top">{new Date(row.created_at).toLocaleString()}</td>
                 <td className="border px-2 py-1">{row.level}</td>

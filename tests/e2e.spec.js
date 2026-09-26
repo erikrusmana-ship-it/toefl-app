@@ -93,13 +93,13 @@ async function installTestBrowserCapabilities(page) {
   });
 }
 
-async function openStartedModelBTest(page, { onSubmit } = {}) {
+async function openStartedModelBTest(page, { onSubmit, onSessionGet } = {}) {
   await installTestBrowserCapabilities(page);
   const bank = questionBank('model_b');
 
   await page.route('**/api/test-session', async (route) => {
     if (route.request().method() === 'GET') {
-      await route.fulfill({ json: { hasSession: false } });
+      await route.fulfill({ json: onSessionGet ? await onSessionGet() : { hasSession: false } });
       return;
     }
     await route.fulfill({ json: { success: true } });
@@ -210,6 +210,18 @@ test('Public session APIs reject mutations without a valid participant session',
     data: { action: 'verify', code: 'UNPAS-TEST-CODE' },
   });
   expect(crossOriginAccess.status()).toBe(403);
+
+  const crossOriginLog = await request.post('http://localhost:3000/api/log', {
+    headers: { Origin: 'https://example.com' },
+    data: { level: 'warn', message: 'cross-origin test' },
+  });
+  expect(crossOriginLog.status()).toBe(403);
+
+  const invalidLogContentType = await request.post('http://localhost:3000/api/log', {
+    headers: { 'Content-Type': 'text/plain' },
+    data: 'invalid log payload',
+  });
+  expect(invalidLogContentType.status()).toBe(415);
 });
 
 test('All package audio roots are served locally as audio files', async ({ request }) => {
@@ -293,7 +305,41 @@ test('Anti-cheating classifies a fullscreen-only exit as one violation', async (
   await expect(page.getByText('Anti-cheating aktif · 1/2')).toBeVisible();
 });
 
-test('Anti-cheating groups browser signals, ignores recovery blur, then locks and submits on a second incident', async ({ page }) => {
+test('Anti-cheating ignores brief browser focus and visibility transitions', async ({ page }) => {
+  await openStartedModelBTest(page);
+  await page.waitForTimeout(1_900);
+
+  // Dialog browser, kontrol media, dan transisi fullscreen dapat membuat
+  // focus/visibility berubah sangat singkat tanpa peserta meninggalkan tes.
+  await page.evaluate(() => window.__antiCheatTest.setFocus(false));
+  await page.waitForTimeout(350);
+  await page.evaluate(() => window.__antiCheatTest.setFocus(true));
+  await page.evaluate(() => window.__antiCheatTest.setVisibility('hidden'));
+  await page.waitForTimeout(300);
+  await page.evaluate(() => window.__antiCheatTest.setVisibility('visible'));
+  await page.waitForTimeout(1_600);
+
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+  await expect(page.getByText('Anti-cheating aktif · 0/2')).toBeVisible();
+});
+
+test('Anti-cheating counts delayed signals from one continuous departure only once', async ({ page }) => {
+  await openStartedModelBTest(page);
+  await page.waitForTimeout(1_900);
+
+  await page.evaluate(() => window.__antiCheatTest.setVisibility('hidden'));
+  await page.waitForTimeout(1_300);
+  await page.evaluate(() => {
+    window.__antiCheatTest.setFocus(false);
+    window.__antiCheatTest.setFullscreen(false);
+  });
+  await page.waitForTimeout(2_000);
+
+  await expect(page.getByRole('alertdialog')).toContainText('Peringatan Pelanggaran 1 dari 2');
+  await expect(page.getByText('Anti-cheating aktif · 1/2')).toBeVisible();
+});
+
+test('Anti-cheating groups browser signals, ignores recovery blur, then pauses on a second incident', async ({ page }) => {
   const submissions = [];
   await openStartedModelBTest(page, {
     onSubmit: async (body) => submissions.push(body),
@@ -326,37 +372,48 @@ test('Anti-cheating groups browser signals, ignores recovery blur, then locks an
   await expect(page.getByText('Anti-cheating aktif · 1/2')).toBeVisible();
   expect(submissions).toHaveLength(0);
 
-  // Kehilangan fokus berikutnya adalah kejadian terpisah dan harus langsung
-  // mengunci tes, lalu mengirim hasil dengan status pelanggaran.
+  // Kehilangan fokus berikutnya adalah kejadian terpisah dan harus mengunci
+  // tes sampai administrator memberikan keputusan.
   await page.evaluate(() => {
     window.__antiCheatTest.setBlurOnFullscreenRequest(false);
     window.__antiCheatTest.setFocus(false);
   });
 
-  const termination = page.getByRole('alertdialog');
-  await expect(termination).toContainText('Tes Dihentikan');
-  await expect(termination).toContainText('Pelanggaran kedua telah terdeteksi');
-  await expect.poll(() => submissions.length).toBe(1);
-  expect(submissions[0].status).toBe('dihentikan_pelanggaran');
-  expect(submissions[0].violations).toHaveLength(2);
-  expect(submissions[0].violations.map((violation) => violation.type)).toEqual(['TAB_HIDDEN', 'WINDOW_BLUR']);
-  await expect(page.getByRole('heading', { name: /Selamat Anda telah melaksanakan TOEFL/i })).toBeVisible();
+  const paused = page.getByRole('alertdialog');
+  await expect(paused).toContainText('Tes Dijeda');
+  await expect(paused).toContainText('Dua pelanggaran telah terdeteksi');
+  await page.waitForTimeout(500);
+  expect(submissions).toHaveLength(0);
+  await expect(page.getByText('Soal 1 dari 50')).toBeVisible();
 });
 
-test('A failed forced submission keeps the test locked until retry succeeds', async ({ page }) => {
-  let submitAttempts = 0;
+test('Administrator decisions can unlock or end a paused participant session', async ({ page }) => {
+  let adminDecision = 'pending';
+  const deadline = new Date(Date.now() + 30 * 60 * 1000).toISOString();
   await openStartedModelBTest(page, {
-    onSubmit: async () => {
-      submitAttempts += 1;
-      if (submitAttempts <= 3) {
-        return {
-          status: 503,
-          json: { error: 'Simulasi koneksi terputus.' },
-          delayMs: 0,
-        };
-      }
-      return { delayMs: 250 };
-    },
+    onSessionGet: async () => adminDecision !== 'pending' ? {
+      hasSession: true,
+      participantId: 9100,
+      progress: {
+        package_code: 'model_b',
+        package_name: 'TOEFL Model B',
+        status: adminDecision === 'expelled' ? 'dihentikan_pelanggaran' : 'sedang',
+        submitted: adminDecision === 'expelled',
+        section: 'listening',
+        question: 2,
+        section_deadline: deadline,
+        progress_revision: adminDecision === 'expelled' ? 20_000 : 10_000,
+        progress: {
+          version: 3,
+          answersListening: {},
+          answersStructure: {},
+          answersReading: {},
+          violations: [],
+          heardListeningDirections: ['PART A'],
+          heardListeningGroups: [],
+        },
+      },
+    } : { hasSession: false },
   });
   await page.waitForTimeout(1_900);
 
@@ -367,18 +424,17 @@ test('A failed forced submission keeps the test locked until retry succeeds', as
   await page.waitForTimeout(1_900);
 
   await page.evaluate(() => window.__antiCheatTest.setFocus(false));
-  const termination = page.getByRole('alertdialog');
-  await expect(termination).toContainText('Tes Dihentikan');
-  await expect(termination.getByRole('button', { name: 'Coba Simpan Hasil Kembali' })).toBeVisible({ timeout: 8_000 });
-  await expect(termination).toContainText('Simulasi koneksi terputus.');
-  await expect(page.getByText('Soal 1 dari 50')).toBeVisible();
+  await expect(page.getByRole('alertdialog')).toContainText('Tes Dijeda');
 
-  await termination.getByRole('button', { name: 'Coba Simpan Hasil Kembali' }).click();
-  await expect(page.getByRole('heading', { name: /Selamat Anda telah melaksanakan TOEFL/i })).toBeVisible();
-  expect(submitAttempts).toBe(4);
+  adminDecision = 'allowed';
+  await expect(page.getByRole('alertdialog')).toBeHidden({ timeout: 7_000 });
+  await expect(page.getByText('Soal 2 dari 50')).toBeVisible();
+
+  adminDecision = 'expelled';
+  await expect(page.getByRole('heading', { name: /Tes telah dihentikan oleh administrator/i })).toBeVisible({ timeout: 7_000 });
 });
 
-test('Resuming progress with two stored violations automatically finishes the test', async ({ page }) => {
+test('Resuming progress with two stored violations keeps the test paused for admin review', async ({ page }) => {
   await installTestBrowserCapabilities(page);
   const bank = questionBank('model_b');
   const submittedBodies = [];
@@ -419,10 +475,10 @@ test('Resuming progress with two stored violations automatically finishes the te
   await page.goto('http://localhost:3000', { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Lanjutkan Tes' }).click();
 
-  await expect(page.getByRole('alertdialog')).toContainText('Tes Dihentikan');
-  await expect.poll(() => submittedBodies.length).toBe(1);
-  expect(submittedBodies[0].status).toBe('dihentikan_pelanggaran');
-  await expect(page.getByRole('heading', { name: /Selamat Anda telah melaksanakan TOEFL/i })).toBeVisible();
+  await expect(page.getByRole('alertdialog')).toContainText('Tes Dijeda');
+  await page.waitForTimeout(500);
+  expect(submittedBodies).toHaveLength(0);
+  await expect(page.getByText('Soal 8 dari 40')).toBeVisible();
 });
 
 test('Resuming at Listening 31 replays Part B directions and group audio', async ({ page }) => {
@@ -464,6 +520,68 @@ test('Resuming at Listening 31 replays Part B directions and group audio', async
 
   await expect(page.getByRole('heading', { name: /First Conversation/i })).toBeVisible();
   await expect(page.getByLabel('Audio soal 31 sampai 33')).toHaveAttribute('src', '/audio/model-b/listening/conversation-31-33.mp3');
+});
+
+test('Model B Part C recovers from blocked autoplay and opens question 38', async ({ page }) => {
+  await installTestBrowserCapabilities(page);
+  const bank = questionBank('model_b');
+  const resumePayload = {
+    hasSession: true,
+    participantId: 9003,
+    progress: {
+      package_code: 'model_b',
+      package_name: 'TOEFL Model B',
+      section: 'listening',
+      question: 38,
+      section_deadline: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
+      progress_revision: 10,
+      progress: {
+        version: 3,
+        answersListening: {},
+        answersStructure: {},
+        answersReading: {},
+        violations: [],
+        heardListeningDirections: ['PART A', 'PART B'],
+        heardListeningGroups: [31, 34],
+      },
+    },
+  };
+
+  await page.route('**/api/test-session', async (route) => {
+    await route.fulfill({ json: route.request().method() === 'GET' ? resumePayload : { success: true } });
+  });
+  await page.route('**/api/questions', (route) => route.fulfill({ json: bank }));
+  await page.route('**/api/log', (route) => route.fulfill({ status: 204, body: '' }));
+
+  await page.goto('http://localhost:3000', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    Object.defineProperty(HTMLMediaElement.prototype, 'play', {
+      configurable: true,
+      value: async () => {
+        throw new DOMException('Playback requires a user gesture', 'NotAllowedError');
+      },
+    });
+  });
+  await page.getByRole('button', { name: 'Lanjutkan Tes' }).click();
+
+  await expect(page.getByRole('heading', { name: /Part C — Short Talks/i })).toBeVisible();
+  const directionAudio = page.getByLabel('Directions PART C');
+  await expect(directionAudio).toHaveAttribute('src', '/audio/model-b/listening/directions-part-c.mp3');
+  await directionAudio.dispatchEvent('canplay');
+  await expect(page.getByRole('button', { name: 'Klik untuk memutar audio' })).toBeVisible();
+
+  await page.evaluate(() => {
+    Object.defineProperty(HTMLMediaElement.prototype, 'play', { configurable: true, value: async () => undefined });
+  });
+  await page.getByRole('button', { name: 'Klik untuk memutar audio' }).click();
+  await directionAudio.dispatchEvent('ended');
+  await page.getByRole('button', { name: 'Mulai PART C' }).click();
+
+  await expect(page.getByRole('heading', { name: /First Talk/i })).toBeVisible();
+  const talkAudio = page.getByLabel('Audio soal 38 sampai 41');
+  await expect(talkAudio).toHaveAttribute('src', '/audio/model-b/listening/talk-38-41.mp3');
+  await talkAudio.dispatchEvent('ended');
+  await expect(page.getByText('Soal 38 dari 50')).toBeVisible();
 });
 
 test('Landing page remains usable on a phone-sized viewport and blocks translation metadata', async ({ page }) => {

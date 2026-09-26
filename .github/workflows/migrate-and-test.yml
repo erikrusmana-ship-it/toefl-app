@@ -8,6 +8,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CI: 'true'
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      TOEFL_SESSION_SECRET: ci-only-session-secret-at-least-32-characters
     steps:
       - uses: actions/checkout@v4
 
@@ -27,13 +30,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '24'
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
       - name: Install Playwright browsers and deps
-        run: npx playwright install --with-deps
+        run: npx playwright install --with-deps chromium
 
       - name: Start Next dev server
         run: |
@@ -42,8 +46,4 @@ jobs:
           npx wait-on http://localhost:3000 -t 120000
 
       - name: Run Playwright e2e tests
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          NEXT_PUBLIC_AUTO_TERMINATE_ON_SECOND_VIOLATION: 'true'
         run: npm run test:e2e

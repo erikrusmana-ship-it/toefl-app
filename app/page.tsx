@@ -1,7 +1,7 @@
 'use client'
 /* eslint-disable @next/next/no-img-element */
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent, type ReactNode, type SyntheticEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import {
   classifyViolationIncident,
   normalizeAntiCheatViolations,
@@ -10,6 +10,7 @@ import {
   type ViolationType,
 } from '@/lib/anti-cheat'
 import { fetchWithRetry } from '@/lib/client-network'
+import { errorDetails, reportClientLog } from '@/lib/client-log'
 import type { OptionKey } from '@/lib/option-shuffle'
 
 type Step = 'access' | 'biodata' | 'listening' | 'structure' | 'reading' | 'selesai'
@@ -343,8 +344,6 @@ const READING_PARAGRAPH_STARTS: Record<string, number[]> = {
   'Post-Civil War Reconstruction': [1, 6, 9, 14, 17, 20],
 }
 
-const AUTO_TERMINATE = process.env.NEXT_PUBLIC_AUTO_TERMINATE_ON_SECOND_VIOLATION === 'true'
-
 function listeningPart(soal: SoalItem): ListeningPart {
   if (soal.nomor_soal >= 31 && soal.nomor_soal <= 37) return 'PART B'
   if (soal.nomor_soal >= 38) return 'PART C'
@@ -413,99 +412,138 @@ function ReliableAudio({
   onAllSourcesFailed: () => void
 }) {
   const [sourceIndex, setSourceIndex] = useState(0)
-  const audioRef = useRef<HTMLAudioElement>(null)
   const source = sources[sourceIndex]
+  const audioRef = useRef<HTMLAudioElement>(null)
   const [needsUserGesture, setNeedsUserGesture] = useState(false)
+  const loadTimerRef = useRef<number | null>(null)
+  const stallTimerRef = useRef<number | null>(null)
+  const failureInProgressRef = useRef(false)
+  const completedRef = useRef(false)
+  const autoplayAttemptedRef = useRef(false)
+  const onEndedRef = useRef(onEnded)
+  const onReadyRef = useRef(onReady)
+  const onAllSourcesFailedRef = useRef(onAllSourcesFailed)
 
-  const tryAutoPlay = async () => {
-    try {
-      // attempt to play; some browsers block autoplay and will reject the promise
-      await audioRef.current?.play()
-      setNeedsUserGesture(false)
-    } catch (err: any) {
-      // If play was disallowed (NotAllowedError), require user gesture
-      const name = err?.name || ''
-      const message = String(err?.message || '')
-      if (/NotAllowedError|not allowed|play()|DOMException/i.test(name + message)) {
-        setNeedsUserGesture(true)
-      }
-    }
-  }
+  useEffect(() => { onEndedRef.current = onEnded }, [onEnded])
+  useEffect(() => { onReadyRef.current = onReady }, [onReady])
+  useEffect(() => { onAllSourcesFailedRef.current = onAllSourcesFailed }, [onAllSourcesFailed])
 
-  // Track retry attempts per source to avoid immediately skipping a source
-  const retryCountsRef = useRef<number[]>([])
+  const clearLoadTimer = useCallback(() => {
+    if (loadTimerRef.current !== null) window.clearTimeout(loadTimerRef.current)
+    loadTimerRef.current = null
+  }, [])
 
-  useEffect(() => {
-    audioRef.current?.setAttribute('disableremoteplayback', '')
-    // initialize retry counts when sources change
-    retryCountsRef.current = new Array(sources.length).fill(0)
-    setSourceIndex(0)
-    // try autoplay; if blocked we'll surface a play button
-    // delay slightly to give browser a chance to settle
-    setTimeout(() => void tryAutoPlay(), 50)
-  }, [sources])
+  const clearStallTimer = useCallback(() => {
+    if (stallTimerRef.current !== null) window.clearTimeout(stallTimerRef.current)
+    stallTimerRef.current = null
+  }, [])
 
-  const handleError = async (event?: SyntheticEvent<HTMLAudioElement, Event>) => {
-    // If triggered directly by the <audio> onError event, treat as a playback
-    // failure and move to the next source immediately. This matches test
-    // expectations where an emitted error should cause a fallback.
-    if (event) {
-      if (sourceIndex < sources.length - 1) {
-        setSourceIndex((current) => current + 1)
-        return
-      }
-      onAllSourcesFailed()
-      return
-    }
-    // allow a couple of automatic retries for the current source
-    const maxRetries = 2
-    retryCountsRef.current[sourceIndex] = (retryCountsRef.current[sourceIndex] || 0) + 1
+  const failCurrentSource = useCallback((reason: 'load_error' | 'load_timeout' | 'playback_stalled') => {
+    if (failureInProgressRef.current || completedRef.current) return
+    failureInProgressRef.current = true
+    clearLoadTimer()
+    clearStallTimer()
+    reportClientLog({
+      level: 'warn',
+      message: `Audio ${reason}: ${label}`,
+      href: window.location.href,
+      meta: { source, sourceIndex, sourceCount: sources.length, reason },
+    })
 
-    // try a lightweight HEAD request to determine if the file is reachable
-    try {
-      const resp = await fetch(source, { method: 'HEAD', cache: 'no-store' })
-      if (resp.ok) {
-        // resource reachable — try to reload the audio element once
-        try {
-          audioRef.current?.load()
-          await audioRef.current?.play().catch(() => undefined)
-          return
-        } catch {
-          // fall through to retry/skip logic
-        }
-      }
-    } catch {
-      // network/HEAD failed — fall through to retry/skip logic
-    }
-
-    if (retryCountsRef.current[sourceIndex] <= maxRetries) {
-      // wait briefly before retrying
-      setTimeout(() => {
-        try { audioRef.current?.load() } catch { /* ignore */ }
-      }, 300 * retryCountsRef.current[sourceIndex])
-      return
-    }
-
-    // exhausted retries for current source — move to next if available
     if (sourceIndex < sources.length - 1) {
       setSourceIndex((current) => current + 1)
       return
     }
 
-    onAllSourcesFailed()
+    onAllSourcesFailedRef.current()
+  }, [clearLoadTimer, clearStallTimer, label, source, sourceIndex, sources.length])
+
+  useEffect(() => {
+    failureInProgressRef.current = false
+    completedRef.current = false
+    autoplayAttemptedRef.current = false
+    clearLoadTimer()
+    clearStallTimer()
+    loadTimerRef.current = window.setTimeout(() => failCurrentSource('load_timeout'), 15_000)
+
+    return () => {
+      clearLoadTimer()
+      clearStallTimer()
+    }
+  }, [clearLoadTimer, clearStallTimer, failCurrentSource, source])
+
+  const tryPlay = async () => {
+    try {
+      if (!audioRef.current) return
+      await audioRef.current.play()
+      setNeedsUserGesture(false)
+    } catch (error) {
+      const details = errorDetails(error)
+      setNeedsUserGesture(true)
+      reportClientLog({
+        level: 'info',
+        message: `Audio menunggu klik pengguna: ${label}`,
+        href: window.location.href,
+        stack: details.stack,
+        meta: { source, error: details.message },
+      })
+    }
+  }
+
+  const finishPlayback = () => {
+    if (completedRef.current) return
+    completedRef.current = true
+    clearLoadTimer()
+    clearStallTimer()
+    onEndedRef.current()
+  }
+
+  const handleCanPlay = () => {
+    audioRef.current?.setAttribute('disableremoteplayback', '')
+    clearLoadTimer()
+    onReadyRef.current?.()
+    if (!autoplayAttemptedRef.current) {
+      autoplayAttemptedRef.current = true
+      void tryPlay()
+    }
+  }
+
+  const handleWaiting = () => {
+    clearStallTimer()
+    stallTimerRef.current = window.setTimeout(() => failCurrentSource('playback_stalled'), 12_000)
+  }
+
+  const handlePlaying = () => {
+    clearLoadTimer()
+    clearStallTimer()
+    setNeedsUserGesture(false)
+  }
+
+  const handleTimeUpdate = () => {
+    const audio = audioRef.current
+    if (!audio || !Number.isFinite(audio.duration) || audio.duration <= 0) return
+    if (audio.currentTime >= audio.duration - 0.2) finishPlayback()
   }
 
   const playOnUserGesture = async () => {
     try {
       await audioRef.current?.play()
       setNeedsUserGesture(false)
-    } catch {
+    } catch (error) {
       // still failing; keep the button visible so user can retry
       setNeedsUserGesture(true)
+      const details = errorDetails(error)
+      reportClientLog({
+        level: 'warn',
+        message: `Audio gagal diputar setelah klik pengguna: ${label}`,
+        href: window.location.href,
+        stack: details.stack,
+        meta: { source, error: details.message },
+      })
     }
   }
 
-    return (
+  return (
     <div style={{ position: 'relative' }}>
       <audio
         ref={audioRef}
@@ -513,11 +551,14 @@ function ReliableAudio({
         aria-label={label}
         controls
         controlsList="nodownload noplaybackrate noremoteplayback"
-        autoPlay
         preload="auto"
-        onCanPlay={onReady}
-        onEnded={onEnded}
-        onError={handleError}
+        onCanPlay={handleCanPlay}
+        onPlaying={handlePlaying}
+        onWaiting={handleWaiting}
+        onStalled={handleWaiting}
+        onTimeUpdate={handleTimeUpdate}
+        onEnded={finishPlayback}
+        onError={() => failCurrentSource('load_error')}
         onContextMenu={(event) => event.preventDefault()}
         src={source}
         style={{ width: '100%', margin: '12px 0' }}
@@ -682,7 +723,6 @@ export default function HomePage() {
   const [audioError, setAudioError] = useState('')
   const [navigating, setNavigating] = useState(false)
   const [antiCheatWarning, setAntiCheatWarning] = useState<AntiCheatViolation | null>(null)
-  const [terminationPending, setTerminationPending] = useState(false)
   const [waitingAdminApproval, setWaitingAdminApproval] = useState(false)
   const [violationCount, setViolationCount] = useState(0)
   const submitting = useRef(false)
@@ -693,8 +733,7 @@ export default function HomePage() {
   const pendingViolationSignalsRef = useRef<Set<ViolationType>>(new Set())
   const violationFlushTimerRef = useRef<number | null>(null)
   const recoveryGraceTimerRef = useRef<number | null>(null)
-  const forcedTerminationRef = useRef(false)
-  const submitRef = useRef<() => void>(() => undefined)
+  const awayIncidentActiveRef = useRef(false)
   const saveSequenceRef = useRef(0)
   const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve())
   const progressRevisionRef = useRef(0)
@@ -734,7 +773,9 @@ export default function HomePage() {
           question?: number
           section_deadline?: string
           progress_revision?: number
-          progress?: any
+          progress?: Partial<ProgressData>
+          status?: string
+          submitted?: boolean
         }
 
         if (!mounted) return
@@ -744,6 +785,17 @@ export default function HomePage() {
 
         // Only apply when we have the question bank loaded to map question indexes
         if (listening.length + structure.length + reading.length === 0) return
+
+        if (serverProgress.submitted || serverProgress.status === 'dihentikan_pelanggaran') {
+          progressRevisionRef.current = serverRevision
+          antiCheatActiveRef.current = false
+          setWaitingAdminApproval(false)
+          setPageMessage('Tes telah dihentikan oleh administrator. Jawaban terakhir yang tersimpan dapat diperiksa pada dashboard admin.')
+          await fetch('/api/test-session', { method: 'DELETE' }).catch(() => undefined)
+          if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
+          setStep('selesai')
+          return
+        }
 
         const activeStep: ActiveStep = ['listening', 'structure', 'reading'].includes(String(serverProgress.section))
           ? (serverProgress.section as ActiveStep)
@@ -758,8 +810,11 @@ export default function HomePage() {
         progressRevisionRef.current = serverRevision
         // If admin reviewed and allowed, clear waiting flag and resume
         setWaitingAdminApproval(false)
-        forcedTerminationRef.current = false
-        setTerminationPending(false)
+        setPageMessage('')
+        antiCheatActiveRef.current = true
+        antiCheatRecoveryRef.current = false
+        awayIncidentActiveRef.current = false
+        lastViolationAtRef.current = Date.now()
 
         // Apply answers if provided
         try {
@@ -779,7 +834,7 @@ export default function HomePage() {
         setPackageCode(sessionData.progress?.package_code || packageCode)
         setPesertaId(Number(sessionData.participantId))
         setStep(activeStep)
-      } catch (error) {
+      } catch {
         // ignore polling errors
       }
     }
@@ -903,23 +958,12 @@ export default function HomePage() {
       progressRevisionRef.current = Math.max(0, Number(serverProgress.progress_revision) || 0)
       violationsRef.current = storedViolations
       setViolationCount(storedViolations.length)
-      // If there are 2+ stored violations: either auto-terminate (test/CI) or wait admin review (default).
+      // Pelanggaran kedua selalu dijeda sampai administrator mengambil keputusan.
       if (shouldTerminate) {
-        if (AUTO_TERMINATE) {
-          antiCheatActiveRef.current = false
-          forcedTerminationRef.current = true
-          setAntiCheatWarning(null)
-          setPageMessage('')
-          setTerminationPending(true)
-        } else {
-          forcedTerminationRef.current = false
-          setTerminationPending(false)
-          setWaitingAdminApproval(true)
-          antiCheatActiveRef.current = false
-        }
+        setAntiCheatWarning(null)
+        setWaitingAdminApproval(true)
+        antiCheatActiveRef.current = false
       } else {
-        forcedTerminationRef.current = false
-        setTerminationPending(false)
         setWaitingAdminApproval(false)
         antiCheatActiveRef.current = true
       }
@@ -999,12 +1043,12 @@ export default function HomePage() {
     }
 
     violationsRef.current = []
-    forcedTerminationRef.current = false
     antiCheatRecoveryRef.current = false
+    awayIncidentActiveRef.current = false
     lastViolationAtRef.current = Date.now()
     setViolationCount(0)
     setAntiCheatWarning(null)
-    setTerminationPending(false)
+    setWaitingAdminApproval(false)
 
     setLoading(true)
     let participant: { participant_id?: number; section_deadline?: string; package_code?: string; package_name?: string } | null = null
@@ -1095,7 +1139,7 @@ export default function HomePage() {
     antiCheatActiveRef.current = false
     setLoading(true)
     const violations = [...violationsRef.current]
-    const statusTes = forcedTerminationRef.current ? 'dihentikan_pelanggaran' : 'selesai'
+    const statusTes = 'selesai'
     const allQuestions = [...listening, ...structure, ...reading]
     const allAnswers = { ...answersListening, ...answersStructure, ...answersReading }
     const answersPayload = allQuestions.map((question) => ({
@@ -1113,7 +1157,7 @@ export default function HomePage() {
     if (!scoreResponse.ok || !scoreData?.success) {
       setPageMessage(scoreData?.error || 'Hasil belum tersimpan. Periksa koneksi lalu klik Selesaikan kembali.')
       submitting.current = false
-      antiCheatActiveRef.current = !forcedTerminationRef.current
+      antiCheatActiveRef.current = true
       setLoading(false)
       return
     }
@@ -1121,18 +1165,8 @@ export default function HomePage() {
     setLoading(false)
     await fetch('/api/test-session', { method: 'DELETE' }).catch(() => undefined)
     if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined)
-    setTerminationPending(false)
     setStep('selesai')
   }, [pesertaId, listening, structure, reading, answersListening, answersStructure, answersReading])
-
-  useEffect(() => {
-    submitRef.current = () => { void submit() }
-  }, [submit])
-
-  useEffect(() => {
-    if (!terminationPending || !pesertaId || !['listening', 'structure', 'reading'].includes(step) || submitting.current) return
-    submitRef.current()
-  }, [terminationPending, pesertaId, step])
 
   const persistProgress = useCallback(() => {
     if (!pesertaId || submitting.current || !['listening', 'structure', 'reading'].includes(step)) return Promise.resolve(false)
@@ -1200,7 +1234,6 @@ export default function HomePage() {
     if (
       !antiCheatActiveRef.current ||
       antiCheatRecoveryRef.current ||
-      forcedTerminationRef.current ||
       submitting.current
     ) return
 
@@ -1220,40 +1253,56 @@ export default function HomePage() {
     void persistProgress()
 
     if (violations.length >= 2) {
-      if (AUTO_TERMINATE) {
-        antiCheatActiveRef.current = false
-        forcedTerminationRef.current = true
-        setAntiCheatWarning(null)
-        setPageMessage('')
-        setTerminationPending(true)
-        return
-      }
       antiCheatActiveRef.current = false
-      forcedTerminationRef.current = false
       setAntiCheatWarning(null)
       setPageMessage('Pelanggaran terdeteksi sebanyak 2 kali. Menunggu keputusan admin untuk melanjutkan atau dikeluarkan.')
-      setTerminationPending(false)
       setWaitingAdminApproval(true)
       return
     }
 
+    // Bekukan pencatatan sampai peserta mengakui peringatan dan berhasil
+    // kembali ke fullscreen. Event browser susulan dari insiden yang sama
+    // tidak boleh berubah menjadi pelanggaran kedua.
+    antiCheatActiveRef.current = false
     setAntiCheatWarning(violation)
   }, [persistProgress, step])
 
   useEffect(() => {
     if (step === 'access' || step === 'biodata' || step === 'selesai') return
     const pendingSignals = pendingViolationSignalsRef.current
+    let visibilityTimer: number | null = null
+    let blurTimer: number | null = null
+    let fullscreenTimer: number | null = null
+
+    const clearTimer = (timer: number | null) => {
+      if (timer !== null) window.clearTimeout(timer)
+    }
+
+    const fullyRecovered = () => (
+      document.visibilityState === 'visible' &&
+      document.hasFocus() &&
+      Boolean(document.fullscreenElement)
+    )
+
+    const releaseIncidentWhenRecovered = () => {
+      if (fullyRecovered() && violationFlushTimerRef.current === null) {
+        awayIncidentActiveRef.current = false
+      }
+    }
 
     const queueViolationSignal = (type: ViolationType) => {
       if (
         !antiCheatActiveRef.current ||
         antiCheatRecoveryRef.current ||
-        forcedTerminationRef.current ||
         submitting.current
       ) return
 
+      // Selama peserta belum benar-benar kembali ke halaman dalam fullscreen,
+      // semua event browser dianggap bagian dari satu kejadian yang sama.
+      if (awayIncidentActiveRef.current && violationFlushTimerRef.current === null) return
       pendingSignals.add(type)
       if (violationFlushTimerRef.current !== null) return
+      awayIncidentActiveRef.current = true
 
       // Browser biasanya mengirim visibilitychange, blur, dan fullscreenchange
       // dalam satu rangkaian. Kelompokkan ketiganya menjadi satu kejadian.
@@ -1266,18 +1315,42 @@ export default function HomePage() {
     }
 
     const handleVisibility = () => {
-      if (document.visibilityState === 'hidden') queueViolationSignal('TAB_HIDDEN')
+      clearTimer(visibilityTimer)
+      visibilityTimer = null
+      if (document.visibilityState === 'hidden') {
+        // Abaikan perubahan visibility yang sangat singkat akibat transisi UI.
+        visibilityTimer = window.setTimeout(() => {
+          visibilityTimer = null
+          if (document.visibilityState === 'hidden') queueViolationSignal('TAB_HIDDEN')
+        }, 700)
+      } else {
+        releaseIncidentWhenRecovered()
+      }
     }
-    let blurCheckTimer: number | null = null
+
     const handleBlur = () => {
-      if (blurCheckTimer !== null) window.clearTimeout(blurCheckTimer)
-      blurCheckTimer = window.setTimeout(() => {
-        blurCheckTimer = null
+      clearTimer(blurTimer)
+      blurTimer = window.setTimeout(() => {
+        blurTimer = null
         if (!document.hasFocus()) queueViolationSignal('WINDOW_BLUR')
-      }, 0)
+      }, 1200)
+    }
+    const handleFocus = () => {
+      clearTimer(blurTimer)
+      blurTimer = null
+      releaseIncidentWhenRecovered()
     }
     const handleFullscreen = () => {
-      if (!document.fullscreenElement) queueViolationSignal('FULLSCREEN_EXIT')
+      clearTimer(fullscreenTimer)
+      fullscreenTimer = null
+      if (!document.fullscreenElement) {
+        fullscreenTimer = window.setTimeout(() => {
+          fullscreenTimer = null
+          if (!document.fullscreenElement) queueViolationSignal('FULLSCREEN_EXIT')
+        }, 900)
+      } else {
+        releaseIncidentWhenRecovered()
+      }
     }
     const blockContextMenu = (event: MouseEvent) => event.preventDefault()
     const blockClipboard = (event: ClipboardEvent) => event.preventDefault()
@@ -1295,10 +1368,13 @@ export default function HomePage() {
     document.addEventListener('cut', blockClipboard)
     document.addEventListener('paste', blockClipboard)
     window.addEventListener('blur', handleBlur)
+    window.addEventListener('focus', handleFocus)
     window.addEventListener('keydown', blockShortcut, true)
 
     return () => {
-      if (blurCheckTimer !== null) window.clearTimeout(blurCheckTimer)
+      clearTimer(visibilityTimer)
+      clearTimer(blurTimer)
+      clearTimer(fullscreenTimer)
       if (violationFlushTimerRef.current !== null) {
         window.clearTimeout(violationFlushTimerRef.current)
         violationFlushTimerRef.current = null
@@ -1311,6 +1387,7 @@ export default function HomePage() {
       document.removeEventListener('cut', blockClipboard)
       document.removeEventListener('paste', blockClipboard)
       window.removeEventListener('blur', handleBlur)
+      window.removeEventListener('focus', handleFocus)
       window.removeEventListener('keydown', blockShortcut, true)
     }
   }, [recordViolation, step])
@@ -1324,18 +1401,22 @@ export default function HomePage() {
     }
     if (recoveryGraceTimerRef.current !== null) window.clearTimeout(recoveryGraceTimerRef.current)
 
+    let recovered = false
     try {
       if (!document.fullscreenElement) await document.documentElement.requestFullscreen({ navigationUI: 'hide' })
       lastViolationAtRef.current = Date.now()
+      awayIncidentActiveRef.current = false
       setAntiCheatWarning(null)
+      recovered = true
     } catch {
       alert('Anda harus mengizinkan fullscreen untuk kembali mengerjakan tes.')
     } finally {
       lastViolationAtRef.current = Date.now()
       recoveryGraceTimerRef.current = window.setTimeout(() => {
         antiCheatRecoveryRef.current = false
+        antiCheatActiveRef.current = recovered
         recoveryGraceTimerRef.current = null
-      }, 750)
+      }, 1200)
     }
   }
 
@@ -1435,7 +1516,7 @@ export default function HomePage() {
               <label style={fieldLabel}>Alamat Email<input required minLength={5} name="email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nama@email.com" style={input} /></label>
               <div style={antiCheatNotice}>
                 <strong>Aturan anti-cheating</strong>
-                <span>Gunakan Google Chrome dan izinkan fullscreen. Membuka tab, jendela, atau aplikasi lain dihitung sebagai pelanggaran. Pelanggaran kedua akan mengakhiri tes otomatis.</span>
+                <span>Gunakan Google Chrome dan izinkan fullscreen. Membuka tab, jendela, atau aplikasi lain dihitung sebagai pelanggaran. Pelanggaran kedua akan menjeda tes sampai administrator memberikan keputusan.</span>
               </div>
               <button type="submit" disabled={loading} style={purpleButton(loading)}>{loading ? 'Menyimpan...' : 'Mulai English Proficiency Test'}</button>
             </form>
@@ -1453,7 +1534,7 @@ export default function HomePage() {
             <img src="/logo-unpas.png" alt="Logo UNPAS" style={{ display: 'block', width: 330, height: 330, objectFit: 'contain', flex: '0 0 auto' }} />
           </div>
           <h2 style={{ color: '#4c1d95', lineHeight: 1.6, margin: 0 }}>
-            Selamat Anda telah melaksanakan TOEFL, semoga hasil yang diraih sesuai dengan harapan
+            {pageMessage || 'Selamat Anda telah melaksanakan TOEFL, semoga hasil yang diraih sesuai dengan harapan'}
           </h2>
         </div>
       </main>
@@ -1560,23 +1641,17 @@ export default function HomePage() {
 
   return (
     <main style={{ ...testPage, maxWidth: isReading ? 900 : 700 }}>
-      {terminationPending ? (
-        <div style={antiCheatOverlay} role="alertdialog" aria-modal="true" aria-labelledby="anti-cheat-termination-title">
+      {waitingAdminApproval ? (
+        <div style={antiCheatOverlay} role="alertdialog" aria-modal="true" aria-labelledby="anti-cheat-review-title">
           <div style={antiCheatDialog}>
             <div style={warningIcon}>!</div>
-            <h2 id="anti-cheat-termination-title" style={{ margin: 0, color: '#991b1b' }}>Tes Dihentikan</h2>
+            <h2 id="anti-cheat-review-title" style={{ margin: 0, color: '#991b1b' }}>Tes Dijeda</h2>
             <p style={{ margin: 0, lineHeight: 1.6 }}>
-              Pelanggaran kedua telah terdeteksi. Halaman soal dikunci dan hasil yang sudah dikerjakan sedang disimpan otomatis.
+              Dua pelanggaran telah terdeteksi. Halaman soal dikunci sementara dan menunggu keputusan administrator.
             </p>
-            {pageMessage && <p role="alert" style={{ ...errorNotice, margin: 0 }}>{pageMessage}</p>}
-            <button
-              type="button"
-              disabled={loading}
-              onClick={() => { submitRef.current() }}
-              style={{ ...purpleButton(loading), width: '100%' }}
-            >
-              {loading ? 'Menyimpan hasil...' : 'Coba Simpan Hasil Kembali'}
-            </button>
+            <p style={{ margin: 0, color: '#4b5563', lineHeight: 1.6 }}>
+              Tetap berada di halaman ini. Status akan diperiksa otomatis setiap 5 detik.
+            </p>
           </div>
         </div>
       ) : antiCheatWarning && (
@@ -1585,7 +1660,7 @@ export default function HomePage() {
             <div style={warningIcon}>!</div>
             <h2 id="anti-cheat-title" style={{ margin: 0, color: '#991b1b' }}>Peringatan Pelanggaran 1 dari 2</h2>
             <p style={{ margin: 0, lineHeight: 1.6 }}><strong>Terdeteksi:</strong> {antiCheatWarning.label}.</p>
-            <p style={{ margin: 0, color: '#4b5563', lineHeight: 1.6 }}>Kembali ke tes dalam mode fullscreen. Jika terjadi satu pelanggaran lagi, tes akan dihentikan dan hasil dikirim otomatis.</p>
+            <p style={{ margin: 0, color: '#4b5563', lineHeight: 1.6 }}>Kembali ke tes dalam mode fullscreen. Jika terjadi satu pelanggaran lagi, tes akan dijeda sampai administrator memberikan keputusan.</p>
             <button type="button" onClick={() => { void resumeAfterWarning() }} style={{ ...purpleButton(false), width: '100%' }}>
               Kembali ke Tes dalam Fullscreen
             </button>

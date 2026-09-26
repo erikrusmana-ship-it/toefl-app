@@ -305,13 +305,6 @@ export async function POST(
       )
     }
 
-    // Pelanggaran kedua selalu mengakhiri tes, meskipun payload client
-    // keliru mengirim status "selesai".
-    const effectiveStatus =
-      violations.length >= 2
-        ? 'dihentikan_pelanggaran'
-        : status
-
     /**
      * ========================================
      * 8. SUBMIT KE DATABASE
@@ -320,6 +313,30 @@ export async function POST(
 
     const supabase =
       createSupabaseAdminClient()
+
+    let effectiveStatus = status
+    if (violations.length >= 2 && status === 'selesai') {
+      const { data: review, error: reviewError } = await supabase
+        .from('peserta')
+        .select('admin_reviewed,admin_review_action')
+        .eq('id', session.participantId)
+        .single()
+
+      if (reviewError) {
+        console.error('Status peninjauan admin gagal dimuat:', reviewError.message)
+        return noStore({ error: 'Keputusan administrator belum dapat diperiksa.' }, 503)
+      }
+
+      const allowedByAdmin = review.admin_reviewed === true && ['allow', 'force_advance'].includes(String(review.admin_review_action))
+      if (!allowedByAdmin) {
+        return noStore(
+          { error: 'Tes sedang dijeda dan menunggu keputusan administrator.' },
+          409
+        )
+      }
+
+      effectiveStatus = 'selesai'
+    }
 
     const {
       data,

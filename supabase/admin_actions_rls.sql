@@ -6,16 +6,9 @@ BEGIN;
 -- Enable RLS on admin_actions
 ALTER TABLE IF EXISTS public.admin_actions ENABLE ROW LEVEL SECURITY;
 
--- Allow only users with app_metadata.role = 'admin' to SELECT/INSERT/UPDATE/DELETE
-CREATE POLICY IF NOT EXISTS "admins_only" ON public.admin_actions
-  FOR ALL
-  USING ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin')
-  WITH CHECK ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin');
-
--- If you need service_role (server-side) to bypass RLS, service role key should be
--- used; no extra policy required for service_role because it bypasses RLS.
+-- Semua akses aplikasi melalui route/server action yang memakai service role.
+-- Jangan beri browser akses langsung, termasuk kepada sesi authenticated.
+DROP POLICY IF EXISTS "admins_only" ON public.admin_actions;
+REVOKE ALL ON TABLE public.admin_actions FROM anon, authenticated;
 
 COMMIT;
-
--- Optional: grant minimal privileges to authenticated users (read-only) if desired
--- GRANT SELECT ON public.admin_actions TO authenticated;

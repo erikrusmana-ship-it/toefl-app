@@ -50,6 +50,18 @@ for (let round = 0; round < rounds; round += 1) {
 const durations = samples.map((sample) => sample.durationMs).sort((a, b) => a - b)
 const percentile = (value) => durations[Math.min(durations.length - 1, Math.floor(durations.length * value))] || 0
 const failures = samples.filter((sample) => !sample.ok)
+const byPath = Object.fromEntries(scenarios.map((scenario) => {
+  const pathSamples = samples.filter((sample) => sample.path === scenario.path)
+  const pathDurations = pathSamples.map((sample) => sample.durationMs).sort((a, b) => a - b)
+  const pathPercentile = (value) => pathDurations[Math.min(pathDurations.length - 1, Math.floor(pathDurations.length * value))] || 0
+  return [scenario.path, {
+    requests: pathSamples.length,
+    failures: pathSamples.filter((sample) => !sample.ok).length,
+    p50: Math.round(pathPercentile(0.5)),
+    p95: Math.round(pathPercentile(0.95)),
+    max: Math.round(pathDurations.at(-1) || 0),
+  }]
+}))
 const report = {
   target,
   requests: samples.length,
@@ -61,6 +73,7 @@ const report = {
     p95: Math.round(percentile(0.95)),
     max: Math.round(durations.at(-1) || 0),
   },
+  byPath,
   failedSamples: failures.slice(0, 10),
 }
 

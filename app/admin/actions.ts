@@ -26,7 +26,7 @@ export async function logoutAdmin() {
 }
 
 export async function toggleAccessCode(formData: FormData) {
-  const supabase = await requireAdmin()
+  await requireAdmin()
   const id = Number(formData.get('id'))
   const nextState = formData.get('nextState') === 'true'
   if (!Number.isInteger(id) || id < 1) return
@@ -42,6 +42,12 @@ export async function adminExpelParticipant(formData: FormData) {
   const id = Number(formData.get('id'))
   if (!Number.isInteger(id) || id < 1) return
   const admin = createSupabaseAdminClient()
+  const { data: participant, error: participantError } = await admin
+    .from('peserta')
+    .select('progress_revision')
+    .eq('id', id)
+    .single()
+  if (participantError || !participant) throw new Error('Peserta tidak ditemukan')
 
   const { error } = await admin.from('peserta').update({
     status_tes: 'dihentikan_pelanggaran',
@@ -49,13 +55,15 @@ export async function adminExpelParticipant(formData: FormData) {
     admin_reviewed: true,
     admin_review_action: 'expel',
     admin_reviewed_at: new Date().toISOString(),
+    progress_revision: Number(participant.progress_revision || 0) + 1000,
   }).eq('id', id)
 
   if (error) throw new Error(`Gagal mengeluarkan peserta: ${error.message}`)
   // record admin action audit using service role (so RLS doesn't block)
   try {
     const { data: userData } = await supabase.auth.getUser()
-    await admin.from('admin_actions').insert({ peserta_id: id, admin_user_id: userData?.user?.id || null, action: 'expel', reason: String(formData.get('reason') || '') })
+    const { error: auditError } = await admin.from('admin_actions').insert({ peserta_id: id, admin_user_id: userData?.user?.id || null, action: 'expel', reason: String(formData.get('reason') || '') })
+    if (auditError) console.error('Failed to write admin action audit:', auditError.message)
   } catch (err) {
     console.error('Failed to write admin action audit', err)
   }
@@ -67,10 +75,17 @@ export async function adminAllowParticipant(formData: FormData) {
   const id = Number(formData.get('id'))
   if (!Number.isInteger(id) || id < 1) return
 
-  const { data, error: selErr } = await supabase.from('peserta').select('progress_revision').eq('id', id).limit(1).single()
-  if (selErr) throw new Error('Peserta tidak ditemukan')
-  const bump = (Number(data?.progress_revision || 0) + 1000)
   const admin = createSupabaseAdminClient()
+  const { data, error: selErr } = await admin
+    .from('peserta')
+    .select('progress_revision,submitted_at,status_tes')
+    .eq('id', id)
+    .single()
+  if (selErr || !data) throw new Error('Peserta tidak ditemukan')
+  if (data.submitted_at || data.status_tes === 'dihentikan_pelanggaran') {
+    throw new Error('Tes peserta sudah difinalisasi dan tidak dapat dilanjutkan.')
+  }
+  const bump = Number(data.progress_revision || 0) + 1000
 
   const { error } = await admin.from('peserta').update({
     admin_reviewed: true,
@@ -85,7 +100,8 @@ export async function adminAllowParticipant(formData: FormData) {
   // record admin action audit using service role
   try {
     const { data: userData } = await supabase.auth.getUser()
-    await admin.from('admin_actions').insert({ peserta_id: id, admin_user_id: userData?.user?.id || null, action: 'allow', reason: String(formData.get('reason') || '') })
+    const { error: auditError } = await admin.from('admin_actions').insert({ peserta_id: id, admin_user_id: userData?.user?.id || null, action: 'allow', reason: String(formData.get('reason') || '') })
+    if (auditError) console.error('Failed to write admin action audit:', auditError.message)
   } catch (err) {
     console.error('Failed to write admin action audit', err)
   }
@@ -94,13 +110,21 @@ export async function adminAllowParticipant(formData: FormData) {
 
 export async function forceAdvanceParticipant(formData: FormData) {
   const supabase = await requireAdmin()
+  const admin = createSupabaseAdminClient()
 
   const id = Number(formData.get('id'))
   const action = String(formData.get('action') || 'next')
   if (!Number.isInteger(id) || id < 1) return
 
-  const { data, error } = await supabase.from('peserta').select('id,current_section,current_question,progress_revision').eq('id', id).limit(1).single()
+  const { data, error } = await admin
+    .from('peserta')
+    .select('id,current_section,current_question,progress_revision,submitted_at,status_tes')
+    .eq('id', id)
+    .single()
   if (error || !data) throw new Error('Peserta tidak ditemukan')
+  if (data.submitted_at || data.status_tes === 'dihentikan_pelanggaran') {
+    throw new Error('Tes peserta sudah difinalisasi dan tidak dapat dilanjutkan.')
+  }
 
   const section = String(data.current_section || 'listening')
   const q = Number(data.current_question || 1)
@@ -121,7 +145,8 @@ export async function forceAdvanceParticipant(formData: FormData) {
         newQuestion = 1
       } else {
         // already at end; mark submitted
-        await supabase.from('peserta').update({ status_tes: 'selesai', submitted_at: new Date().toISOString() }).eq('id', id)
+        const { error: finishError } = await admin.from('peserta').update({ status_tes: 'selesai', submitted_at: new Date().toISOString() }).eq('id', id)
+        if (finishError) throw new Error(`Gagal menyelesaikan tes peserta: ${finishError.message}`)
         revalidatePath('/admin')
         return
       }
@@ -137,21 +162,23 @@ export async function forceAdvanceParticipant(formData: FormData) {
   // bump progress_revision to ensure client accepts server override
   const bump = (Number(data.progress_revision || 0) + 1000)
 
-  const admin = createSupabaseAdminClient()
-
   const { error: updateError } = await admin.from('peserta').update({
     current_section: newSection,
     current_question: newQuestion,
     progress_revision: bump,
     last_activity_at: new Date().toISOString(),
-    status_tes: 'sedang'
+    status_tes: 'sedang',
+    admin_reviewed: true,
+    admin_review_action: 'force_advance',
+    admin_reviewed_at: new Date().toISOString(),
   }).eq('id', id)
 
   if (updateError) throw new Error(`Gagal memaksa peserta lanjut: ${updateError.message}`)
   // record admin action audit using service role
   try {
     const { data: userData } = await supabase.auth.getUser()
-    await admin.from('admin_actions').insert({ peserta_id: id, admin_user_id: userData?.user?.id || null, action: action === 'next' ? 'force_advance' : `force_${action}`, meta: { from: { section, question: q }, to: { section: newSection, question: newQuestion } } })
+    const { error: auditError } = await admin.from('admin_actions').insert({ peserta_id: id, admin_user_id: userData?.user?.id || null, action: action === 'next' ? 'force_advance' : `force_${action}`, meta: { from: { section, question: q }, to: { section: newSection, question: newQuestion } } })
+    if (auditError) console.error('Failed to write admin action audit:', auditError.message)
   } catch (err) {
     console.error('Failed to write admin action audit', err)
   }

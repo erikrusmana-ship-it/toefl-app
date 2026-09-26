@@ -2,11 +2,13 @@ import { NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 
-function toCSV(rows: any[]) {
+type ClientLogRow = Record<string, unknown>
+
+function toCSV(rows: ClientLogRow[]) {
   const headers = ['id', 'created_at', 'level', 'message', 'href', 'stack', 'meta']
-  const escape = (v: any) => {
-    if (v === null || v === undefined) return ''
-    const s = typeof v === 'string' ? v : JSON.stringify(v)
+  const escape = (value: unknown) => {
+    if (value === null || value === undefined) return ''
+    const s = typeof value === 'string' ? value : JSON.stringify(value)
     return `"${s.replace(/"/g, '""')}"`
   }
   const lines = [headers.join(',')]
@@ -14,6 +16,10 @@ function toCSV(rows: any[]) {
     lines.push(headers.map((h) => escape(r[h])).join(','))
   }
   return lines.join('\n')
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
 }
 
 export async function GET(request: Request) {
@@ -29,7 +35,7 @@ export async function GET(request: Request) {
       if (claims?.app_metadata?.role !== 'admin') {
         return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
       }
-    } catch (err) {
+    } catch {
       return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
     }
   }
@@ -57,19 +63,19 @@ export async function GET(request: Request) {
         }
         return NextResponse.json({ error: error.message }, { status: 500 })
       }
-      const csv = toCSV(allData || [])
+      const csv = toCSV((allData || []) as ClientLogRow[])
       return new Response(csv, {
         headers: {
           'Content-Type': 'text/csv; charset=utf-8',
           'Content-Disposition': `attachment; filename=client_logs_all_${Date.now()}.csv`,
         },
       })
-    } catch (err: any) {
+    } catch (error) {
       // If the table does not exist in this environment, return header-only CSV
-      if (String(err.message || '').includes("Could not find the table 'public.client_logs'")) {
+      if (errorMessage(error).includes("Could not find the table 'public.client_logs'")) {
         return new Response(toCSV([]), { headers: { 'Content-Type': 'text/csv; charset=utf-8' } })
       }
-      return NextResponse.json({ error: String(err?.message || err) }, { status: 500 })
+      return NextResponse.json({ error: errorMessage(error) }, { status: 500 })
     }
   }
 
@@ -85,17 +91,17 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    const csv = toCSV(data || [])
+    const csv = toCSV((data || []) as ClientLogRow[])
     return new Response(csv, {
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': `attachment; filename=client_logs_${Date.now()}.csv`,
       },
     })
-  } catch (err: any) {
-    if (String(err.message || '').includes("Could not find the table 'public.client_logs'")) {
+  } catch (error) {
+    if (errorMessage(error).includes("Could not find the table 'public.client_logs'")) {
       return new Response(toCSV([]), { headers: { 'Content-Type': 'text/csv; charset=utf-8' } })
     }
-    return NextResponse.json({ error: String(err?.message || err) }, { status: 500 })
+    return NextResponse.json({ error: errorMessage(error) }, { status: 500 })
   }
 }

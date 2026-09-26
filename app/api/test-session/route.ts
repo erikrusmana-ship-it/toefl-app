@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 
 import { createSupabaseAdminClient } from '@/lib/supabase-admin'
+import { normalizeAntiCheatViolations } from '@/lib/anti-cheat'
 
 import {
   decodeTestSession,
@@ -367,6 +368,25 @@ export async function PUT(
       )
     }
 
+    const progress = payload.progress as Record<string, unknown>
+    const violations = normalizeAntiCheatViolations(progress.violations ?? [])
+    if (!violations) {
+      return noStore(
+        {
+          error: 'Data pelanggaran pada progress tidak valid.',
+        },
+        400
+      )
+    }
+
+    // Jangan simpan label atau format pelanggaran dari client apa adanya.
+    // Normalisasi ini memastikan dashboard admin hanya menerima data baku.
+    const sanitizedProgress = {
+      ...progress,
+      violationCount: violations.length,
+      violations,
+    }
+
     const supabase =
       createSupabaseAdminClient()
 
@@ -392,7 +412,7 @@ export async function PUT(
           revision,
 
         p_progress:
-          payload.progress,
+          sanitizedProgress,
       }
     )
 

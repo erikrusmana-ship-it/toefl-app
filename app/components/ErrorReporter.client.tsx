@@ -1,27 +1,26 @@
 "use client"
 import { useEffect } from 'react'
-
-function postLog(payload: Record<string, unknown>) {
-  try {
-    void fetch('/api/log', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-  } catch {
-    // ignore
-  }
-}
+import { errorDetails, reportClientLog } from '@/lib/client-log'
 
 export default function ErrorReporter() {
   useEffect(() => {
     const onError = (e: ErrorEvent) => {
-      postLog({ level: 'error', message: e.message, href: location.href, stack: e.error?.stack || '' })
+      // Kegagalan resource seperti audio/image dapat memicu window.error tanpa
+      // message maupun Error object. Komponen resource sudah mencatat detailnya,
+      // jadi jangan memenuhi log dengan pesan "undefined".
+      if (!e.message && !e.error) return
+      const details = errorDetails(e.error)
+      reportClientLog({
+        level: 'error',
+        message: e.message || details.message,
+        href: location.href,
+        stack: details.stack,
+      })
     }
 
     const onUnhandledRejection = (e: PromiseRejectionEvent) => {
-      const reason = (e.reason as any) || {}
-      postLog({ level: 'error', message: reason?.message || String(reason), href: location.href, stack: reason?.stack || '' })
+      const details = errorDetails(e.reason)
+      reportClientLog({ level: 'error', message: details.message, href: location.href, stack: details.stack })
     }
 
     window.addEventListener('error', onError)

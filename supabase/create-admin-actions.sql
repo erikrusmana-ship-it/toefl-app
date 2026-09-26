@@ -5,7 +5,7 @@ BEGIN;
 
 CREATE TABLE IF NOT EXISTS public.admin_actions (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  peserta_id uuid REFERENCES public.peserta(id) ON DELETE CASCADE,
+  peserta_id bigint REFERENCES public.peserta(id) ON DELETE CASCADE,
   admin_user_id uuid,
   action text NOT NULL, -- e.g. 'allow' | 'expel' | 'force_advance'
   reason text,

@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { logoutAdmin, toggleAccessCode } from './actions'
 import ForceAdvanceForm from './ForceAdvanceForm.client'
-import ForceDecisionForm, { ExpelForm, AllowForm } from './ForceDecisionForm.client'
+import { ExpelForm, AllowForm } from './ForceDecisionForm.client'
 import AutoRefresh from './auto-refresh'
 import RetryResultEmails from './retry-result-emails'
 
@@ -126,6 +126,7 @@ function monitoringStatus(participant: Participant, now: number) {
     if (participant.status_tes === 'dihentikan_pelanggaran') return { key: 'stopped', label: 'Dihentikan', className: 'bg-red-100 text-red-800' }
     return { key: 'completed', label: 'Selesai', className: 'bg-emerald-100 text-emerald-800' }
   }
+  if (participant.status_tes === 'menunggu_admin') return { key: 'review', label: 'Menunggu admin', className: 'bg-fuchsia-100 text-fuchsia-800' }
   if (new Date(participant.section_deadline).getTime() < now) return { key: 'expired', label: 'Waktu habis', className: 'bg-orange-100 text-orange-800' }
   if (now - new Date(participant.last_activity_at).getTime() <= 75_000) return { key: 'active', label: 'Aktif', className: 'bg-blue-100 text-blue-800' }
   return { key: 'disconnected', label: 'Terputus', className: 'bg-amber-100 text-amber-800' }
@@ -298,8 +299,8 @@ export default async function AdminPage() {
                         <td className="px-3 py-3">{formatDate(participant.test_started_at || participant.created_at)}</td>
                         <td className="px-3 py-3">{formatDate(participant.submitted_at)}</td>
                         <td className="px-3 py-3">
-                          <ForceAdvanceForm id={participant.id} />
-                          {participant.pelanggaran_count >= 2 && participant.status_tes !== 'dihentikan_pelanggaran' ? (
+                          {!participant.submitted_at && participant.status_tes !== 'dihentikan_pelanggaran' ? <ForceAdvanceForm id={participant.id} /> : null}
+                          {participant.pelanggaran_count >= 2 && !participant.submitted_at && participant.status_tes !== 'dihentikan_pelanggaran' ? (
                             <div className="mt-2 flex gap-2">
                               <AllowForm id={participant.id} />
                               <ExpelForm id={participant.id} />

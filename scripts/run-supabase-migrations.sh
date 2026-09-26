@@ -13,6 +13,8 @@ fi
 : "Files to apply (in order)" || true
 MIGRATIONS=(
   "${ROOT_DIR}/supabase/add-admin-review-columns.sql"
+  "${ROOT_DIR}/supabase/harden-anti-cheat-review.sql"
+  "${ROOT_DIR}/supabase/add-client-logs.sql"
   "${ROOT_DIR}/supabase/proactive-fixes-client-logs.sql"
   "${ROOT_DIR}/supabase/create-admin-actions.sql"
   "${ROOT_DIR}/supabase/admin_actions_rls.sql"

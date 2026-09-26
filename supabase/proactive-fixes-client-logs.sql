@@ -41,24 +41,11 @@ CREATE INDEX IF NOT EXISTS client_logs_message_trgm ON public.client_logs USING 
 -- ALTER TABLE public.client_logs ADD COLUMN IF NOT EXISTS user_id uuid;
 -- ALTER TABLE public.client_logs ADD CONSTRAINT IF NOT EXISTS fk_client_logs_user FOREIGN KEY (user_id) REFERENCES auth.users (id) ON DELETE SET NULL;
 
--- 7) Row Level Security: enable and create an admin-only SELECT policy
--- NOTE: Adjust the claim name to match how you set admin claims (e.g. is_admin=true)
+-- 7) Row Level Security. Admin UI membaca melalui server/service role,
+-- sehingga tidak diperlukan policy langsung untuk browser.
 ALTER TABLE public.client_logs ENABLE ROW LEVEL SECURITY;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_policies WHERE polname = 'admin_select' AND tablename = 'client_logs'
-  ) THEN
-    EXECUTE 'CREATE POLICY admin_select ON public.client_logs FOR SELECT USING (current_setting(''jwt.claims.is_admin'', true) = ''true'')';
-  END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_policies WHERE polname = 'allow_server_insert' AND tablename = 'client_logs'
-  ) THEN
-    -- Allow inserts from server (service role bypasses RLS). This policy is a conservative placeholder
-    EXECUTE 'CREATE POLICY allow_server_insert ON public.client_logs FOR INSERT WITH CHECK (true)';
-  END IF;
-END$$;
+DROP POLICY IF EXISTS admin_select ON public.client_logs;
+DROP POLICY IF EXISTS allow_server_insert ON public.client_logs;
 
 -- 8) Minimal privileges: revoke broad anon access (review before running)
 REVOKE ALL ON public.client_logs FROM anon;
